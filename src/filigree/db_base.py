@@ -11,7 +11,7 @@ import time
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ParamSpec, Protocol, TypeVar
+from typing import TYPE_CHECKING, Any, ParamSpec, Protocol, TypeVar, cast
 
 from filigree.models import FileRecord, Issue
 from filigree.types.core import AssocType, ISOTimestamp, ScanRunStatus, StatusCategory
@@ -66,7 +66,7 @@ def _begin_immediate(conn: sqlite3.Connection, operation: str) -> None:
     conn.execute("BEGIN IMMEDIATE")
 
 
-def _in_immediate_tx(operation: str) -> Callable[[Callable[..., _R]], Callable[..., _R]]:
+def _in_immediate_tx(operation: str) -> Callable[[Callable[_P, _R]], Callable[_P, _R]]:
     """Wrap a public write method in BEGIN IMMEDIATE + commit/rollback lifecycle.
 
     The decorator consumes a ``_skip_begin=False`` kwarg from the caller — it
@@ -81,7 +81,7 @@ def _in_immediate_tx(operation: str) -> Callable[[Callable[..., _R]], Callable[.
     (filigree-2.1.0 §2.1).
     """
 
-    def decorate(fn: Callable[..., _R]) -> Callable[..., _R]:
+    def decorate(fn: Callable[_P, _R]) -> Callable[_P, _R]:
         @functools.wraps(fn)
         def wrapper(self: Any, *args: Any, _skip_begin: bool = False, **kwargs: Any) -> _R:
             if _skip_begin:
@@ -89,17 +89,17 @@ def _in_immediate_tx(operation: str) -> Callable[[Callable[..., _R]], Callable[.
             _begin_immediate(self.conn, operation)
             try:
                 result = fn(self, *args, **kwargs)
+                self.conn.commit()
             except Exception:
                 self.conn.rollback()
                 raise
-            self.conn.commit()
             return result
 
         # Expose ``_skip_begin`` in the wrapper's introspectable signature so
         # ``inspect.signature`` (which follows ``__wrapped__`` by default) and
         # the mixin-contract test see the kwarg the wrapper actually accepts.
         wrapper.__signature__ = _augment_signature_with_skip_begin(fn)  # type: ignore[attr-defined]
-        return wrapper
+        return cast("Callable[_P, _R]", wrapper)
 
     return decorate
 
@@ -137,7 +137,7 @@ def _retry_busy(
     attempts: int = 3,
     base: float = 0.05,
     sleep: Callable[[float], None] = time.sleep,
-) -> Callable[[Callable[..., _R]], Callable[..., _R]]:
+) -> Callable[[Callable[_P, _R]], Callable[_P, _R]]:
     """Retry a wrapped op on transient ``SQLITE_BUSY`` / ``SQLITE_LOCKED``.
 
     Catches ``sqlite3.OperationalError`` carrying a transient SQLite lock
@@ -157,7 +157,7 @@ def _retry_busy(
     contention without burning wall time.
     """
 
-    def decorate(fn: Callable[..., _R]) -> Callable[..., _R]:
+    def decorate(fn: Callable[_P, _R]) -> Callable[_P, _R]:
         @functools.wraps(fn)
         def wrapper(self: Any, *args: Any, **kwargs: Any) -> _R:
             if kwargs.get("_skip_begin"):
@@ -173,7 +173,7 @@ def _retry_busy(
                     sleep(base * (2**attempt))
             raise RuntimeError("unreachable")  # pragma: no cover
 
-        return wrapper
+        return cast("Callable[_P, _R]", wrapper)
 
     return decorate
 

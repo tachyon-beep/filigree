@@ -11,6 +11,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from filigree.core import FiligreeDB
+from filigree.types.api import ClaimConflictError, InvalidTransitionError
 from tests.conftest import PopulatedDB
 
 
@@ -864,13 +865,17 @@ class TestClaimNextExhaustion:
         result = db.claim_next("agent2")
         assert result is None
 
-    def test_claim_next_logs_on_race_exhaustion(self, db: FiligreeDB) -> None:
-        """When claim_issue raises ValueError for all candidates, warn about exhaustion."""
+    def test_claim_next_logs_on_claim_conflict_exhaustion(self, db: FiligreeDB) -> None:
+        """When claim_issue raises ClaimConflictError for all candidates, warn about exhaustion."""
         db.create_issue("Target")
 
-        # Simulate claim_issue always raising ValueError (race condition)
+        # Simulate claim_issue always raising ClaimConflictError (claim race)
         with (
-            patch.object(db, "claim_issue", side_effect=ValueError("race")),
+            patch.object(
+                db,
+                "claim_issue",
+                side_effect=ClaimConflictError("test-race", observed="other", expected="agent2"),
+            ),
             patch("filigree.db_issues.logger") as mock_logger,
         ):
             result = db.claim_next("agent2")
@@ -878,6 +883,26 @@ class TestClaimNextExhaustion:
         assert result is None
         mock_logger.warning.assert_called_once()
         assert "failed to claim" in str(mock_logger.warning.call_args)
+
+    def test_claim_next_propagates_validation_bug_from_claim_phase(self, db: FiligreeDB) -> None:
+        """Bug-class ValueError from claim_issue must not be hidden as a race."""
+        db.create_issue("Target")
+
+        with (
+            patch.object(db, "claim_issue", side_effect=ValueError("invariant exploded")),
+            pytest.raises(ValueError, match="invariant exploded"),
+        ):
+            db.claim_next("agent2")
+
+    def test_claim_next_propagates_invalid_transition_from_claim_phase(self, db: FiligreeDB) -> None:
+        """InvalidTransitionError is a ValueError subclass, but it is not a claim race."""
+        db.create_issue("Target")
+
+        with (
+            patch.object(db, "claim_issue", side_effect=InvalidTransitionError("task", "open")),
+            pytest.raises(InvalidTransitionError),
+        ):
+            db.claim_next("agent2")
 
     def test_claim_next_skips_deleted_issue(self, db: FiligreeDB) -> None:
         """Bug filigree-e55da01144: KeyError from deleted issue must be caught, not propagated."""

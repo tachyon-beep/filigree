@@ -12,6 +12,50 @@ IssueId = NewType("IssueId", str)
 ClarionEntityId = NewType("ClarionEntityId", str)
 ContentHash = NewType("ContentHash", str)
 
+_MAX_CONTENT_HASH_LEN = 512
+
+
+def make_issue_id(value: str) -> IssueId:
+    """Validate and brand an issue id crossing an untyped boundary."""
+    if not isinstance(value, str) or not value.strip():
+        msg = "issue_id must not be blank"
+        raise ValueError(msg)
+    return IssueId(value)
+
+
+def make_clarion_entity_id(value: str) -> ClarionEntityId:
+    """Validate and brand an opaque Clarion entity id.
+
+    Filigree deliberately does not parse Clarion's entity-id grammar; this only
+    rejects empty values at the local boundary.
+    """
+    if not isinstance(value, str) or not value.strip():
+        msg = "entity_id must not be blank"
+        raise ValueError(msg)
+    return ClarionEntityId(value)
+
+
+def make_content_hash(value: str) -> ContentHash:
+    """Validate and brand a content-hash token.
+
+    The algorithm and length remain the producer's contract. Filigree only
+    rejects values that are unusable as stable comparison tokens: blank,
+    padded, whitespace/control-bearing, or implausibly large strings.
+    """
+    if not isinstance(value, str) or not value.strip():
+        msg = "content_hash must not be blank"
+        raise ValueError(msg)
+    if value != value.strip():
+        msg = "content_hash must not contain leading or trailing whitespace"
+        raise ValueError(msg)
+    if len(value) > _MAX_CONTENT_HASH_LEN:
+        msg = f"content_hash must be at most {_MAX_CONTENT_HASH_LEN} characters"
+        raise ValueError(msg)
+    if any(ch.isspace() or ord(ch) < 32 or ord(ch) == 127 for ch in value):
+        msg = "content_hash must not contain whitespace or control characters"
+        raise ValueError(msg)
+    return ContentHash(value)
+
 # Constrained-string Literal types — canonical definitions.
 # core.py re-exports these; db_files.py derives frozensets via get_args().
 Severity = Literal["critical", "high", "medium", "low", "info"]

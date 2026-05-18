@@ -580,10 +580,10 @@ class ClaimConflictError(ValueError):
 class AmbiguousTransitionError(Exception):
     """Raised when start-work cannot choose between multiple wip-category targets.
 
-    Carries the ambiguous type_name plus the full list of candidate
-    target states so callers can render a disambiguation prompt. Stage 3
-    will wire this into the ``start_work`` path; the type is defined now
-    so the mapping is stable when the raise sites land.
+    Carries the issue type, candidate target states, and optionally the
+    current status so DB, CLI, MCP, and dashboard handlers can return a
+    structured disambiguation prompt and require callers to pass
+    ``target_status`` explicitly.
     """
 
     def __init__(self, type_name: str, candidates: list[str], current_status: str | None = None) -> None:
@@ -599,12 +599,25 @@ class AmbiguousTransitionError(Exception):
 
 
 class InvalidTransitionError(ValueError):
-    """Raised by WorkflowPack.canonical_working_status when no wip-category
-    target is reachable from the current status.
+    """Workflow transition failure with machine-readable context.
 
-    Carries type_name + current_status so callers can show *why* a workflow
-    transition is unavailable. Subclasses ValueError so existing state-machine
-    error handlers continue to classify it as INVALID_TRANSITION.
+    Raised for explicit status updates, close/reopen/release reverse paths, and
+    start-work canonicalization when a requested target is unavailable. The
+    error carries ``type_name`` and ``current_status`` for the source state,
+    optional ``to_state`` for the rejected target, and ``backward`` when the
+    caller was using the declared reverse/escape lane instead of a forward
+    workflow transition.
+
+    ``valid_transitions`` is a compact hint list suitable for API, CLI, and MCP
+    error payloads. It is populated by callers that have enough field/template
+    context to compute next steps; consumers should treat ``None`` as
+    "not computed" rather than "no valid transitions exist." Subclasses
+    ``ValueError`` so existing state-machine handlers continue to classify it
+    as INVALID_TRANSITION.
+
+    ``backward`` is in-process diagnostic context for reverse/escape-edge
+    validation. Wire serializers intentionally choose the fields they expose
+    instead of serializing ``__dict__`` wholesale.
     """
 
     def __init__(
@@ -632,6 +645,24 @@ class InvalidTransitionError(ValueError):
         else:
             message = f"Transition {current_status!r} -> {to_state!r} is not declared for type {type_name!r}."
         super().__init__(message)
+
+    def with_valid_transitions(self, valid_transitions: list[TransitionHint]) -> InvalidTransitionError:
+        """Return an enriched copy without mutating the caught exception.
+
+        Enrichment often happens after a lower layer raises. Returning a new
+        exception preserves the original object for diagnostics while keeping
+        ``type_name``, ``current_status``, ``to_state``, ``backward``, and the
+        human-readable message intact for the caller that will serialize or log
+        the enriched failure.
+        """
+        return InvalidTransitionError(
+            self.type_name,
+            self.current_status,
+            to_state=self.to_state,
+            backward=self.backward,
+            valid_transitions=valid_transitions,
+            message=str(self),
+        )
 
 
 def errorcode_to_http_status(code: ErrorCode) -> int:

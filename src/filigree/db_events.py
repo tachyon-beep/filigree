@@ -93,6 +93,14 @@ class EventsMixin(DBMixinProtocol):
         new_value: str | None = None,
         comment: str = "",
     ) -> None:
+        """Append an audit event inside the caller-owned transaction.
+
+        Public write paths normally reach this through ``@_in_immediate_tx``,
+        which holds SQLite's single-writer lock until the surrounding mutation
+        commits or rolls back. Direct callers outside that decorator must own
+        equivalent transaction serialization before depending on the per-issue
+        ``event_seq`` monotonicity guarantee. This helper never commits.
+        """
         # 2.1.0 §0.2: plain INSERT (not INSERT OR IGNORE) so true-duplicate
         # collisions bubble up to the caller's transaction for rollback.
         # ``event_seq`` is computed inline as the next per-issue monotonic

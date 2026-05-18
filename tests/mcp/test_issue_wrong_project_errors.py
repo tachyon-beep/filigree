@@ -11,6 +11,7 @@ from filigree.core import FiligreeDB
 from filigree.mcp_tools.issues import (
     _handle_claim_issue,
     _handle_close_issue,
+    _handle_create_issue,
     _handle_heartbeat_work,
     _handle_reclaim_issue,
     _handle_release_claim,
@@ -42,6 +43,7 @@ Handler = Callable[[dict[str, Any]], Awaitable[list[Any]]]
             },
         ),
         (_handle_start_work, {"issue_id": "other-1234567890", "assignee": "agent"}),
+        (_handle_create_issue, {"title": "Bad parent", "parent_issue_id": "other-1234567890"}),
     ],
 )
 async def test_wrong_project_issue_ids_are_validation_errors(

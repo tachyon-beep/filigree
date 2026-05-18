@@ -459,6 +459,8 @@ class TestUpdateIssueTransitionEnforcement:
         db.start_work(issue.id, assignee="agent-alpha", actor="agent-alpha")
         original_validate_transition = db.templates.validate_transition
 
+        raised_errors: list[InvalidTransitionError] = []
+
         def fail_backward_validation(
             type_name: str,
             from_state: str,
@@ -468,13 +470,21 @@ class TestUpdateIssueTransitionEnforcement:
             backward: bool = False,
         ) -> Any:
             if backward:
-                raise InvalidTransitionError(type_name, from_state, to_state=to_state)
+                exc = InvalidTransitionError(type_name, from_state, to_state=to_state, backward=True)
+                raised_errors.append(exc)
+                raise exc
             return original_validate_transition(type_name, from_state, to_state, fields, backward=backward)
 
         monkeypatch.setattr(db.templates, "validate_transition", fail_backward_validation)
 
-        with pytest.raises(InvalidTransitionError):
+        with pytest.raises(InvalidTransitionError) as excinfo:
             db.release_claim(issue.id, actor="agent-alpha")
+
+        assert raised_errors
+        assert raised_errors[0].valid_transitions is None
+        assert excinfo.value is not raised_errors[0]
+        assert excinfo.value.backward is True
+        assert excinfo.value.valid_transitions is not None
 
         restored = db.get_issue(issue.id)
         assert restored.status == "in_progress"

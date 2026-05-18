@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 import pytest
 
 from filigree.core import FiligreeDB, WrongProjectError
@@ -280,6 +282,30 @@ class TestBatchTransitionEnrichmentRace:
         assert errors[0]["code"] == "INVALID_TRANSITION"
         # Should NOT have valid_transitions key since the lookup failed
         assert "valid_transitions" not in errors[0]
+
+    def test_batch_close_transition_enrichment_failure_warns_and_preserves_error(
+        self,
+        db: FiligreeDB,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Unexpected enrichment failures are warning-level, but best-effort."""
+
+        issue = db.create_issue("Test")
+        db.close_issue(issue.id)
+
+        def fail_transition_lookup(issue_id: str) -> list[object]:
+            raise RuntimeError(f"transition cache unavailable for {issue_id}")
+
+        monkeypatch.setattr(db, "get_valid_transitions", fail_transition_lookup)
+
+        with caplog.at_level(logging.WARNING, logger="filigree.db_issues"):
+            _results, errors = db.batch_close([issue.id])
+
+        assert len(errors) == 1
+        assert errors[0]["code"] == "INVALID_TRANSITION"
+        assert "valid_transitions" not in errors[0]
+        assert "failed to enrich invalid-transition error" in caplog.text
 
     def test_batch_update_validation_valueerror_classified_as_validation(self, db: FiligreeDB) -> None:
         """Non-transition ValueErrors (e.g. field validation) must be VALIDATION, not INVALID_TRANSITION.

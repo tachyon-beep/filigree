@@ -109,8 +109,13 @@ def test_transition_errors_exist() -> None:
     exc1 = AmbiguousTransitionError("X", ["fixing", "reviewing"])
     assert "fixing" in str(exc1)
 
-    exc2 = InvalidTransitionError("X", "confirmed")
+    exc2 = InvalidTransitionError("X", "confirmed", to_state="triage", backward=True)
     assert "confirmed" in str(exc2)
+    enriched = exc2.with_valid_transitions([{"to": "open", "category": "open", "ready": True}])
+    assert enriched is not exc2
+    assert str(enriched) == str(exc2)
+    assert enriched.backward is True
+    assert enriched.valid_transitions == [{"to": "open", "category": "open", "ready": True}]
 
 
 def test_scan_ingest_response_loom_concrete_shape() -> None:

@@ -170,8 +170,8 @@ class TypeTemplate:
     def canonical_working_status(self) -> str:
         """Return the unique wip-category status name for this type.
 
-        Used by ``start_work`` / ``start_next_work`` (Phase D6) to default
-        ``target_status`` for legacy type-level callers. Raises
+        Used by ``start_work`` / ``start_next_work`` to default
+        ``target_status`` for type-level callers. Raises
         ``AmbiguousTransitionError`` if multiple wip statuses exist (caller
         must specify ``target_status`` explicitly); raises
         ``InvalidTransitionError`` if the type has no wip statuses.

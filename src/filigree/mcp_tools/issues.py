@@ -87,6 +87,26 @@ def _claim_conflict_response(exc: ClaimConflictError) -> list[TextContent]:
     )
 
 
+def _issue_value_error_response(tracker: Any, issue_id: str, exc: ValueError) -> list[TextContent]:
+    if isinstance(exc, ClaimConflictError):
+        return _claim_conflict_response(exc)
+    msg = str(exc)
+    if isinstance(exc, (AmbiguousTransitionError, InvalidTransitionError)):
+        valid_transitions = exc.valid_transitions if isinstance(exc, InvalidTransitionError) else None
+        return _text(_build_transition_error(tracker, issue_id, msg, valid_transitions=valid_transitions))
+    code = classify_value_error(msg)
+    if code == ErrorCode.INVALID_TRANSITION:
+        return _text(_build_transition_error(tracker, issue_id, msg))
+    return _text(ErrorResponse(error=msg, code=code))
+
+
+def _release_claim_value_error_response(tracker: Any, issue_id: str, exc: ValueError) -> list[TextContent]:
+    msg = str(exc)
+    if msg.startswith(f"Cannot release {issue_id}:") and "no assignee set" in msg:
+        return _text(ErrorResponse(error=msg, code=ErrorCode.CONFLICT))
+    return _issue_value_error_response(tracker, issue_id, exc)
+
+
 def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
     """Return (tool_definitions, handler_map) for issue-domain tools."""
     tools = [
@@ -877,6 +897,8 @@ async def _handle_create_issue(arguments: dict[str, Any]) -> list[TextContent]:
             deps=args.get("deps"),
             actor=actor,
         )
+    except WrongProjectError as e:
+        return _wrong_project_response(e)
     except ValueError as e:
         return _text(ErrorResponse(error=str(e), code=ErrorCode.VALIDATION))
     _refresh_summary()
@@ -974,11 +996,7 @@ async def _handle_close_issue(arguments: dict[str, Any]) -> list[TextContent]:
     except WrongProjectError as e:
         return _wrong_project_response(e)
     except ValueError as e:
-        msg = str(e)
-        if isinstance(e, ClaimConflictError):
-            return _claim_conflict_response(e)
-        transitions = e.valid_transitions if isinstance(e, InvalidTransitionError) else None
-        return _text(_build_transition_error(tracker, args["issue_id"], msg, valid_transitions=transitions))
+        return _issue_value_error_response(tracker, args["issue_id"], e)
 
 
 async def _handle_reopen_issue(arguments: dict[str, Any]) -> list[TextContent]:
@@ -1001,7 +1019,7 @@ async def _handle_reopen_issue(arguments: dict[str, Any]) -> list[TextContent]:
     except WrongProjectError as e:
         return _wrong_project_response(e)
     except ValueError as e:
-        return _text(ErrorResponse(error=str(e), code=ErrorCode.INVALID_TRANSITION))
+        return _issue_value_error_response(tracker, args["issue_id"], e)
 
 
 async def _handle_search_issues(arguments: dict[str, Any]) -> list[TextContent]:
@@ -1109,7 +1127,7 @@ async def _handle_release_claim(arguments: dict[str, Any]) -> list[TextContent]:
     except ClaimConflictError as e:
         return _claim_conflict_response(e)
     except ValueError as e:
-        return _text(ErrorResponse(error=str(e), code=ErrorCode.CONFLICT))
+        return _release_claim_value_error_response(tracker, args["issue_id"], e)
 
 
 async def _handle_release_my_claims(arguments: dict[str, Any]) -> list[TextContent]:
@@ -1227,7 +1245,7 @@ async def _handle_heartbeat_work(arguments: dict[str, Any]) -> list[TextContent]
     except ClaimConflictError as e:
         return _claim_conflict_response(e)
     except ValueError as e:
-        return _text(ErrorResponse(error=str(e), code=ErrorCode.CONFLICT))
+        return _issue_value_error_response(tracker, args["issue_id"], e)
 
 
 async def _handle_get_stale_claims(arguments: dict[str, Any]) -> list[TextContent]:
@@ -1292,7 +1310,7 @@ async def _handle_reclaim_issue(arguments: dict[str, Any]) -> list[TextContent]:
     except ClaimConflictError as e:
         return _claim_conflict_response(e)
     except ValueError as e:
-        return _text(ErrorResponse(error=str(e), code=ErrorCode.CONFLICT))
+        return _issue_value_error_response(tracker, args["issue_id"], e)
 
 
 async def _handle_claim_next(arguments: dict[str, Any]) -> list[TextContent]:

@@ -364,11 +364,13 @@ def release_claim(
 
 Releases a claimed issue by clearing its assignee. Does **not** change status.
 By default this is strict and raises when the issue is already unassigned. With
-`if_held=True`, unassigned issues are returned unchanged, and assigned issues are
-only released when held by `expected_assignee` or, if omitted, `actor`.
+`if_held=True`, unassigned issues are returned unchanged, but assigned issues are
+only released when held by `expected_assignee` or, if omitted, `actor`;
+held-by-other mismatches raise `ClaimConflictError`.
 
-**Raises:** `ValueError` if strict mode sees no assignee, or if `if_held=True`
-would clear a claim held by someone other than the expected holder.
+**Raises:** `ValueError` if strict mode sees no assignee; `ClaimConflictError`
+if `if_held=True` would clear a claim held by someone other than the expected
+holder.
 
 #### `heartbeat_work`
 

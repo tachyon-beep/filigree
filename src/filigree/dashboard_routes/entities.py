@@ -35,6 +35,7 @@ from filigree.dashboard_routes.common import (
     _validate_actor,
 )
 from filigree.types.api import ErrorCode
+from filigree.types.core import make_clarion_entity_id, make_content_hash, make_issue_id
 
 logger = logging.getLogger(__name__)
 
@@ -75,9 +76,11 @@ def create_classic_router() -> APIRouter:
         # path and does not enforce prefix, so doing it first would
         # mask cross-project errors as 404.
         try:
-            rows = db.list_entity_associations(issue_id)
+            rows = db.list_entity_associations(make_issue_id(issue_id))
         except WrongProjectError as exc:
             return _error_response(exc.safe_message, ErrorCode.VALIDATION, 400)
+        except ValueError as exc:
+            return _error_response(str(exc), ErrorCode.VALIDATION, 400)
         if not rows:
             try:
                 db.get_issue(issue_id)
@@ -99,9 +102,7 @@ def create_classic_router() -> APIRouter:
         if not isinstance(entity_id, str) or not entity_id.strip():
             return _error_response("entity_id query parameter is required", ErrorCode.VALIDATION, 400)
         try:
-            rows = db.list_associations_by_entity(entity_id)
-        except WrongProjectError as exc:
-            return _error_response(exc.safe_message, ErrorCode.VALIDATION, 400)
+            rows = db.list_associations_by_entity(make_clarion_entity_id(entity_id))
         except ValueError as exc:
             return _error_response(str(exc), ErrorCode.VALIDATION, 400)
         return JSONResponse({"associations": [dict(row) for row in rows]})
@@ -132,7 +133,12 @@ def create_classic_router() -> APIRouter:
         # pre-check via get_issue() would surface foreign-prefix IDs as
         # 404, contradicting the other write routes.
         try:
-            row = db.add_entity_association(issue_id, entity_id, content_hash, actor=actor)
+            row = db.add_entity_association(
+                make_issue_id(issue_id),
+                make_clarion_entity_id(entity_id),
+                make_content_hash(content_hash),
+                actor=actor,
+            )
         except WrongProjectError as exc:
             return _error_response(exc.safe_message, ErrorCode.VALIDATION, 400)
         except KeyError:
@@ -156,7 +162,11 @@ def create_classic_router() -> APIRouter:
         if actor_err:
             return actor_err
         try:
-            removed = db.remove_entity_association(issue_id, entity_id, actor=actor)
+            removed = db.remove_entity_association(
+                make_issue_id(issue_id),
+                make_clarion_entity_id(entity_id),
+                actor=actor,
+            )
         except WrongProjectError as exc:
             return _error_response(exc.safe_message, ErrorCode.VALIDATION, 400)
         except ValueError as exc:

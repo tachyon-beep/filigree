@@ -29,6 +29,7 @@ from filigree.mcp_tools.common import (
     _validate_actor,
 )
 from filigree.types.api import ErrorCode, ErrorResponse
+from filigree.types.core import make_clarion_entity_id, make_content_hash, make_issue_id
 from filigree.types.inputs import (
     AddEntityAssociationArgs,
     ListAssociationsByEntityArgs,
@@ -177,7 +178,12 @@ async def _handle_add_entity_association(arguments: dict[str, Any]) -> list[Text
             return err
 
     try:
-        row = tracker.add_entity_association(issue_id, entity_id, content_hash, actor=actor)
+        row = tracker.add_entity_association(
+            make_issue_id(issue_id),
+            make_clarion_entity_id(entity_id),
+            make_content_hash(content_hash),
+            actor=actor,
+        )
     except WrongProjectError as exc:
         # 2.1.0 §1.2: untrusted-surface serialisation uses safe_message.
         return _text(ErrorResponse(error=exc.safe_message, code=ErrorCode.VALIDATION))
@@ -208,7 +214,11 @@ async def _handle_remove_entity_association(arguments: dict[str, Any]) -> list[T
             return err
 
     try:
-        removed = tracker.remove_entity_association(issue_id, entity_id, actor=actor)
+        removed = tracker.remove_entity_association(
+            make_issue_id(issue_id),
+            make_clarion_entity_id(entity_id),
+            actor=actor,
+        )
     except WrongProjectError as exc:
         # 2.1.0 §1.2: untrusted-surface serialisation uses safe_message.
         return _text(ErrorResponse(error=exc.safe_message, code=ErrorCode.VALIDATION))
@@ -236,7 +246,7 @@ async def _handle_list_entity_associations(arguments: dict[str, Any]) -> list[Te
     # surfaces as NOT_FOUND rather than masquerading as an empty
     # result, matching get_issue_files (mcp_tools/files.py).
     try:
-        rows = tracker.list_entity_associations(issue_id)
+        rows = tracker.list_entity_associations(make_issue_id(issue_id))
     except WrongProjectError as exc:
         # 2.1.0 §1.2: untrusted-surface serialisation uses safe_message.
         return _text(ErrorResponse(error=exc.safe_message, code=ErrorCode.VALIDATION))
@@ -249,7 +259,6 @@ async def _handle_list_entity_associations(arguments: dict[str, Any]) -> list[Te
 
 
 async def _handle_list_associations_by_entity(arguments: dict[str, Any]) -> list[TextContent]:
-    from filigree.core import WrongProjectError
     from filigree.mcp_server import _get_db
 
     args = _parse_args(arguments, ListAssociationsByEntityArgs)
@@ -261,9 +270,7 @@ async def _handle_list_associations_by_entity(arguments: dict[str, Any]) -> list
         return err
 
     try:
-        rows = tracker.list_associations_by_entity(entity_id)
-    except WrongProjectError as exc:
-        return _text(ErrorResponse(error=exc.safe_message, code=ErrorCode.VALIDATION))
+        rows = tracker.list_associations_by_entity(make_clarion_entity_id(entity_id))
     except ValueError as exc:
         return _text(ErrorResponse(error=str(exc), code=ErrorCode.VALIDATION))
     return _text({"associations": [dict(row) for row in rows]})

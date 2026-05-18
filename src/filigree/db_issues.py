@@ -42,13 +42,17 @@ DEFAULT_CLAIM_LEASE_HOURS = 48
 class _StartCandidateUnclaimableError(Exception):
     """Internal sentinel: ``_start_work_locked``'s claim phase failed.
 
-    Wraps the original ``ValueError`` / ``KeyError`` from ``claim_issue`` so
+    Wraps the original claim-conflict or vanished-row error from ``claim_issue`` so
     the ``start_next_work`` iterator can distinguish "try a different
     candidate" from a user-supplied error in the transition phase (which
     propagates unchanged). Outside the iteration loop, ``start_work``
     unwraps the sentinel and re-raises the original exception to preserve
-    its public API contract (2.1.0 §2.2).
+    its composed start-work public API contract.
     """
+
+
+class _ClaimCandidateVanishedError(Exception):
+    """Internal sentinel for a candidate deleted between discovery and claim."""
 
 
 _LIST_ISSUE_SORT_COLUMNS = {
@@ -93,6 +97,14 @@ def _transition_data_warnings(result: TransitionResult) -> list[str]:
 def _transition_hints(options: list[TransitionOption]) -> list[TransitionHint]:
     """Return the compact structured transition hints used in error envelopes."""
     return [{"to": t.to, "category": t.category, "ready": t.ready} for t in options]
+
+
+def _log_transition_enrichment_failure(issue_id: str, exc: Exception) -> None:
+    """Log a best-effort transition-hint enrichment failure at the right level."""
+    if isinstance(exc, KeyError):
+        logger.debug("Issue %s disappeared while enriching invalid-transition error", issue_id, exc_info=True)
+        return
+    logger.warning("failed to enrich invalid-transition error for %s", issue_id, exc_info=True)
 
 
 def _fields_for_reopen(fields: dict[str, Any]) -> dict[str, Any]:
@@ -308,6 +320,21 @@ def _sanitize_fts_query(query: str) -> str:
 _FTS_LITERAL_HINT_RE = _re.compile(r"[-\[\](){}]")
 
 
+def _is_fts_unavailable_error(exc: sqlite3.OperationalError) -> bool:
+    """Return True when an FTS query failed because FTS5 is unavailable.
+
+    Python's sqlite3 exposes both missing FTS tables and missing FTS5 modules
+    as SQLITE_ERROR, so use the error code when SQLite provides it. Synthetic
+    or older-driver OperationalErrors may not carry ``sqlite_errorcode``; keep
+    a narrow compatibility fallback for the historical messages.
+    """
+    code = getattr(exc, "sqlite_errorcode", None)
+    if isinstance(code, int):
+        return (code & 0xFF) == sqlite3.SQLITE_ERROR
+    message = str(exc).lower()
+    return "no such table: issues_fts" in message or "no such module: fts" in message
+
+
 def _query_uses_literal_substring(query: str) -> bool:
     """Return True when ``query`` should bypass FTS in favour of a LIKE substring.
 
@@ -439,6 +466,7 @@ class IssuesMixin(DBMixinProtocol):
         labels: list[str] | None = None,
         deps: list[str] | None = None,
         actor: str = "",
+        _skip_begin: bool = False,
     ) -> Issue:
         if not title or not title.strip():
             msg = "Title cannot be empty"
@@ -679,7 +707,59 @@ class IssuesMixin(DBMixinProtocol):
         expected_assignee: str | None = None,
         force_overwrite_corrupt: bool = False,
         backward: bool = False,
+        _skip_begin: bool = False,
     ) -> Issue:
+        """Update issue fields, workflow status, assignment, and parent links.
+
+        The write runs in an IMMEDIATE transaction and applies a compare-and-swap
+        guard when the issue is already assigned, so a concurrent reassignment
+        cannot be silently overwritten. Status changes are validated against the
+        issue type's workflow template; pass ``backward=True`` only for declared
+        reverse/escape transitions such as force-close, reopen, or release.
+
+        Args:
+            issue_id: Issue identifier to mutate. The id prefix must belong to
+                this project for write operations.
+            title: Replacement title. Blank titles are rejected.
+            status: Target workflow state. When it differs from the current
+                state, template transition and field-gate validation run before
+                any write.
+            priority: Replacement priority value.
+            assignee: Replacement assignee. Non-empty values refresh claim
+                timestamps; empty values clear claim metadata.
+            description: Replacement description.
+            notes: Replacement notes.
+            parent_id: Replacement parent id, or ``""`` to clear the parent.
+            fields: Field delta to merge into the existing field object.
+            actor: Audit identity. If ``expected_assignee`` is omitted and the
+                issue is held, this also acts as the expected holder.
+            expected_assignee: Optional compare-and-swap holder precondition.
+                Use this when a caller has already observed ownership and wants
+                stale ownership writes to fail with ``ClaimConflictError``.
+            force_overwrite_corrupt: When the stored ``fields`` JSON is corrupt,
+                refuse merges by default. Set this to replace the corrupt value
+                entirely and record a ``corrupt_fields_overwritten`` event.
+            backward: Validate a status change against declared reverse/escape
+                transitions and audit the shortcut with ``transition_forced``.
+
+        Returns:
+            The freshly loaded issue. Soft transition data warnings are also
+            copied onto ``Issue.data_warnings`` for callers that need to surface
+            non-blocking template warnings.
+
+        Raises:
+            KeyError: The issue or requested parent issue does not exist.
+            WrongProjectError: The write targets an id from another project.
+            TypeError: ``fields`` is provided but is not a dictionary.
+            ValueError: Input validation fails, including invalid status,
+                priority, title, parent cycle, field pattern, uniqueness, or a
+                corrupt-field merge without ``force_overwrite_corrupt``.
+            ClaimConflictError: The observed or expected assignee no longer
+                matches at validation or write time.
+            InvalidTransitionError: The requested transition is not declared or
+                is blocked by required fields. ``valid_transitions`` is included
+                when template context is available.
+        """
         self._check_id_prefix(issue_id)
         current = self.get_issue(issue_id)
         # Claim-aware precondition: explicit expected_assignee still behaves
@@ -1067,8 +1147,26 @@ class IssuesMixin(DBMixinProtocol):
     def reopen_issue(self, issue_id: str, *, actor: str = "") -> Issue:
         """Reopen a closed issue to the last non-done status before closure.
 
-        Clears closed_at and stale close-only fields. Only works on issues in
-        done-category states.
+        The target comes from the most recent ``status_changed`` event whose
+        old status is non-done and whose new status is done. If no such event is
+        available, the issue type's initial state is used. Reopen routes through
+        ``update_issue(backward=True)`` so the reverse/escape transition must be
+        declared and any invalid transition carries normal ``valid_transitions``
+        context. After the transition it clears ``closed_at`` and stale
+        close-only fields such as ``close_reason``.
+
+        Args:
+            issue_id: Closed issue to reopen. The id prefix must belong to this
+                project for write operations.
+            actor: Audit identity recorded on transition, fields, and reopened
+                events.
+
+        Raises:
+            KeyError: The issue does not exist.
+            WrongProjectError: The write targets an id from another project.
+            ValueError: The issue is not currently in a done-category state.
+            InvalidTransitionError: The reverse transition to the computed
+                reopen target is not declared or is blocked by field gates.
         """
         self._check_id_prefix(issue_id)
         current = self.get_issue(issue_id)
@@ -1127,7 +1225,7 @@ class IssuesMixin(DBMixinProtocol):
 
     @_retry_busy()
     @_in_immediate_tx("claim_issue")
-    def claim_issue(self, issue_id: str, *, assignee: str, actor: str = "") -> Issue:
+    def claim_issue(self, issue_id: str, *, assignee: str, actor: str = "", _skip_begin: bool = False) -> Issue:
         """Atomically claim an open/wip-category issue with optimistic locking.
 
         Sets assignee only — does NOT change status. Agent uses update_issue
@@ -1226,11 +1324,40 @@ class IssuesMixin(DBMixinProtocol):
         direct predecessor exists. Types with no open-category state get
         no reverse target and stay in wip.
 
-        When ``if_held`` is true, the call is idempotent for release-if-held
-        cleanup flows: unassigned issues are returned unchanged, and claimed
-        issues are only released when the observed assignee matches
-        ``expected_assignee``. If no expected assignee is provided, ``actor`` is
-        used as the expected holder.
+        When ``if_held`` is true, the call is idempotent only for already
+        unassigned issues: those are returned unchanged. Claimed issues are
+        released only when the observed assignee matches ``expected_assignee``;
+        if no expected assignee is provided, ``actor`` is used as the expected
+        holder. A claimed-by-someone-else mismatch raises
+        ``ClaimConflictError`` rather than silently no-oping, so cleanup
+        scripts cannot hide ownership surprises.
+
+        Args:
+            issue_id: Claimed issue to release. The id prefix must belong to
+                this project for write operations.
+            actor: Audit identity. Also becomes the expected holder for
+                ``if_held=True`` when ``expected_assignee`` is omitted.
+            if_held: Make already-unassigned issues idempotent no-ops, while
+                still rejecting claims held by another assignee.
+            expected_assignee: Optional expected holder for ``if_held=True``.
+                A mismatch raises ``ClaimConflictError``.
+            reason: Audit comment recorded on the ``released`` event.
+            revert_status: When true, move wip-category issues back through the
+                declared reverse/escape transition to the open predecessor, or
+                to the template initial state when no direct predecessor exists.
+
+        Raises:
+            KeyError: The issue does not exist.
+            WrongProjectError: The write targets an id from another project.
+            ValueError: ``if_held`` is not boolean, the expected holder is blank,
+                the issue is unassigned and ``if_held`` is false, or the claim
+                was concurrently released.
+            ClaimConflictError: The issue is held by someone other than the
+                expected holder, or it is reassigned between read and write.
+            InvalidTransitionError: The reverse status transition selected by
+                ``revert_status`` is not declared or is blocked by field gates.
+                ``valid_transitions`` is attached when template context is
+                available.
         """
         if not isinstance(if_held, bool):
             msg = "if_held must be a boolean"
@@ -1274,7 +1401,7 @@ class IssuesMixin(DBMixinProtocol):
                     )
                 except InvalidTransitionError as exc:
                     if exc.valid_transitions is None:
-                        exc.valid_transitions = valid_transitions
+                        raise exc.with_valid_transitions(valid_transitions) from exc
                     raise
                 if not result.allowed:
                     if result.missing_fields:
@@ -1442,7 +1569,28 @@ class IssuesMixin(DBMixinProtocol):
         expected_assignee: str | None = None,
         lease_hours: int = DEFAULT_CLAIM_LEASE_HOURS,
     ) -> Issue:
-        """Refresh liveness metadata for a claimed, non-done issue."""
+        """Refresh liveness metadata for a claimed, non-done issue.
+
+        Updates ``last_heartbeat_at``, ``claim_expires_at``, and ``updated_at``
+        only if the assignee observed before the write still owns the issue.
+
+        Args:
+            issue_id: Claimed issue to heartbeat. The id prefix must belong to
+                this project for write operations.
+            actor: Audit identity. If ``expected_assignee`` is omitted, this is
+                also accepted as the expected holder.
+            expected_assignee: Optional explicit holder precondition.
+            lease_hours: Number of hours from now until the refreshed claim
+                expires.
+
+        Raises:
+            KeyError: The issue does not exist.
+            WrongProjectError: The write targets an id from another project.
+            ValueError: The lease value is invalid, the issue is unassigned,
+                the expected holder is blank, or the issue is already done.
+            ClaimConflictError: The issue is held by someone other than the
+                expected holder, or it is reassigned between read and write.
+        """
         _validate_lease_hours(lease_hours)
         self._check_id_prefix(issue_id)
         row = self.conn.execute("SELECT type, status, assignee FROM issues WHERE id = ?", (issue_id,)).fetchone()
@@ -1497,13 +1645,13 @@ class IssuesMixin(DBMixinProtocol):
     ) -> list[Issue]:
         """Return assigned, non-done issues whose ownership appears abandoned or near expiry.
 
-        Modern rows (``claim_expires_at IS NOT NULL``) have their expiry
+        Modern rows with parseable ``claim_expires_at`` have their expiry
         check pushed into the WHERE clause so a polling agent that runs
         ``get_stale_claims`` every N seconds does not scan every assigned
         row in Python (2.1.0 §2.3). The legacy fallback — heartbeat /
         claimed / updated timestamp against ``stale_after_hours`` — still
-        runs in Python for rows whose ``claim_expires_at`` is NULL
-        (created before 2.0's lease columns landed).
+        runs in Python for rows whose ``claim_expires_at`` is NULL or
+        malformed.
         """
         _validate_lease_hours(stale_after_hours)
         if expires_within_hours is not None:
@@ -1520,8 +1668,9 @@ class IssuesMixin(DBMixinProtocol):
             "WHERE COALESCE(i.assignee, '') != '' "
             f"AND NOT ({pred_sql}) "
             "AND ("
-            "  (i.claim_expires_at IS NOT NULL AND datetime(i.claim_expires_at) <= datetime(?))"
-            "  OR i.claim_expires_at IS NULL"
+            "  i.claim_expires_at IS NULL"
+            "  OR datetime(i.claim_expires_at) IS NULL"
+            "  OR datetime(i.claim_expires_at) <= datetime(?)"
             ") "
             "ORDER BY i.priority ASC, i.created_at ASC, i.id ASC",
             [*pred_params, expiry_cutoff_iso],
@@ -1529,17 +1678,16 @@ class IssuesMixin(DBMixinProtocol):
 
         stale_ids: list[str] = []
         for row in rows:
-            # Modern rows: the SQL filter already says this row is stale-or-
-            # near-expiry, so include unconditionally. The Python parse
-            # remains for the rare clock-skew edge where SQLite's UTC
-            # arithmetic disagrees with Python's by sub-second jitter and
-            # we want to defensively re-confirm; if the parse fails we
-            # still include (errs toward visibility).
-            if row["claim_expires_at"] is not None:
+            # Modern parseable rows: the SQL filter already says this row is
+            # stale-or-near-expiry, so include unconditionally. Malformed
+            # non-NULL expiry text is intentionally left for the legacy
+            # timestamp fallback below.
+            if _parse_issue_timestamp(row["claim_expires_at"]) is not None:
                 stale_ids.append(row["id"])
                 continue
 
-            # Legacy fallback for rows predating the claim_expires_at column.
+            # Legacy fallback for rows predating the claim_expires_at column,
+            # plus malformed non-NULL expiry text.
             basis = (
                 _parse_issue_timestamp(row["last_heartbeat_at"])
                 or _parse_issue_timestamp(row["claimed_at"])
@@ -1562,7 +1710,31 @@ class IssuesMixin(DBMixinProtocol):
         actor: str = "",
         lease_hours: int = DEFAULT_CLAIM_LEASE_HOURS,
     ) -> Issue:
-        """Atomically transfer a claim when the observed holder matches."""
+        """Atomically transfer a stale claim to a new assignee.
+
+        The transfer succeeds only when ``expected_assignee`` still matches the
+        observed holder at write time. On success it sets ``assignee``,
+        ``claimed_at``, ``last_heartbeat_at``, ``claim_expires_at``, and
+        ``updated_at`` together and records a ``reclaimed`` event.
+
+        Args:
+            issue_id: Claimed issue to reclaim. The id prefix must belong to
+                this project for write operations.
+            assignee: New holder for the claim. Blank values are rejected.
+            expected_assignee: Holder that the caller believes currently owns
+                the issue. This is the compare-and-swap precondition.
+            reason: Non-empty audit reason recorded on the ``reclaimed`` event.
+            actor: Audit identity performing the reclaim.
+            lease_hours: Number of hours from now until the new claim expires.
+
+        Raises:
+            KeyError: The issue does not exist.
+            WrongProjectError: The write targets an id from another project.
+            ValueError: ``assignee``, ``expected_assignee``, ``reason``, or
+                ``lease_hours`` is invalid, or the issue is already done.
+            ClaimConflictError: The current holder does not match
+                ``expected_assignee`` at validation or write time.
+        """
         _validate_lease_hours(lease_hours)
         assignee = _normalize_assignee(assignee)
         expected_assignee = _normalize_assignee(expected_assignee)
@@ -1678,12 +1850,17 @@ class IssuesMixin(DBMixinProtocol):
                 continue
             try:
                 row = self.conn.execute("SELECT assignee FROM issues WHERE id = ?", (issue.id,)).fetchone()
-                prior_assignee = (row["assignee"] if row is not None else "") or ""
-                claimed = self.claim_issue(issue.id, assignee=assignee, actor=actor or assignee, _skip_begin=_skip_begin)
-            except (ValueError, KeyError) as exc:
+                if row is None:
+                    raise _ClaimCandidateVanishedError(issue.id)
+                prior_assignee = row["assignee"] or ""
+                try:
+                    claimed = self.claim_issue(issue.id, assignee=assignee, actor=actor or assignee, _skip_begin=_skip_begin)
+                except KeyError as exc:
+                    raise _ClaimCandidateVanishedError(issue.id) from exc
+            except (ClaimConflictError, _ClaimCandidateVanishedError) as exc:
                 skipped += 1
                 logger.debug("claim_next: skipping %s: %s", issue.id, exc)
-                continue  # Race condition, status mismatch, or deleted issue
+                continue  # Claim race or deleted issue
             return claimed, prior_assignee
         if skipped:
             logger.warning("claim_next: all %d candidate(s) failed to claim for '%s'", skipped, assignee)
@@ -1699,13 +1876,12 @@ class IssuesMixin(DBMixinProtocol):
     ) -> Issue:
         """Atomically claim an issue and transition it to a working status.
 
-        Phase D6 composed operation. ``target_status`` resolution runs
-        lock-free in this public wrapper; the writer lock is acquired only
-        inside ``_start_work_locked``, which composes ``claim_issue`` +
-        ``update_issue`` under one ``BEGIN IMMEDIATE`` (2.1.0 §2.2). The
-        held-writer window shrinks to claim UPDATE + status UPDATE + event
-        INSERTs + COMMIT — the prior implementation held the lock through
-        the template lookup as well.
+        ``target_status`` resolution runs lock-free in this public wrapper;
+        the writer lock is acquired only inside ``_start_work_locked``, which
+        composes ``claim_issue`` + ``update_issue`` under one
+        ``BEGIN IMMEDIATE``. The held-writer window is limited to claim UPDATE
+        + status UPDATE + event INSERTs + COMMIT; template lookup happens
+        before the transaction opens.
 
         ``target_status`` defaults to the unique wip-category status reachable
         from the issue's current status. If the current status can transition
@@ -1747,12 +1923,12 @@ class IssuesMixin(DBMixinProtocol):
         """Claim the highest-priority ready issue (filtered) and atomically
         transition it to a working status.
 
-        Phase D6 composed operation. Candidate discovery (``get_ready``) and
-        per-candidate ``target_status`` resolution run lock-free; only the
-        per-candidate claim+transition composite acquires a writer lock,
-        via ``_start_work_locked`` (2.1.0 §2.2). On a per-candidate race
-        (claim conflict, status mismatch, deleted issue), the iteration
-        continues to the next candidate without holding any lock.
+        Candidate discovery (``get_ready``) and per-candidate
+        ``target_status`` resolution run lock-free; only the per-candidate
+        claim+transition composite acquires a writer lock via
+        ``_start_work_locked``. On a per-candidate race (claim conflict,
+        status mismatch, deleted issue), the iteration continues to the next
+        candidate without holding any lock.
 
         Returns ``None`` if no ready issue matches the filters.
 
@@ -1840,10 +2016,9 @@ class IssuesMixin(DBMixinProtocol):
         """Private critical section for ``start_work`` / ``start_next_work``.
 
         The ``@_in_immediate_tx`` decorator wraps a tight claim+update
-        composite — no template lookups, no candidate discovery — so the
-        writer lock is held only across the SQL writes (2.1.0 §2.2). On
-        exception the decorator rolls back both the claim and its audit
-        event.
+        composite with no template lookups or candidate discovery, so the
+        writer lock is held only across the SQL writes. On exception the
+        decorator rolls back both the claim and its audit event.
 
         Claim-phase failures (race, status mismatch, deleted issue) are
         repackaged as ``_StartCandidateUnclaimableError`` so the
@@ -1854,7 +2029,7 @@ class IssuesMixin(DBMixinProtocol):
         """
         try:
             self.claim_issue(issue_id, assignee=assignee, actor=actor, _skip_begin=True)
-        except (ValueError, KeyError) as exc:
+        except (ClaimConflictError, KeyError) as exc:
             raise _StartCandidateUnclaimableError(issue_id) from exc
         return self.update_issue(issue_id, status=target_status, actor=actor, _skip_begin=True)
 
@@ -1904,8 +2079,8 @@ class IssuesMixin(DBMixinProtocol):
                     try:
                         transitions = self.get_valid_transitions(issue_id)
                         err["valid_transitions"] = _transition_hints(transitions)
-                    except KeyError:
-                        logger.debug("batch: could not enrich error with transitions for %s", issue_id)
+                    except Exception as exc:
+                        _log_transition_enrichment_failure(issue_id, exc)
                 errors.append(err)
         return results, errors
 
@@ -2242,7 +2417,7 @@ class IssuesMixin(DBMixinProtocol):
                 (fts_query,),
             ).fetchone()
         except sqlite3.OperationalError as exc:
-            if "no such table" not in str(exc) and "no such module" not in str(exc):
+            if not _is_fts_unavailable_error(exc):
                 raise
             logger.warning(
                 "FTS5 search unavailable (%s); falling back to LIKE. Performance may be degraded. Run 'filigree doctor' to check.",
@@ -2321,7 +2496,7 @@ class IssuesMixin(DBMixinProtocol):
                     params,
                 ).fetchall()
             except sqlite3.OperationalError as exc:
-                if "no such table" not in str(exc) and "no such module" not in str(exc):
+                if not _is_fts_unavailable_error(exc):
                     raise
                 logging.getLogger(__name__).warning(
                     "FTS5 search unavailable (%s); falling back to LIKE. Performance may be degraded. Run 'filigree doctor' to check.",

@@ -276,6 +276,83 @@ class TestEntityAssociationsSchema:
 
             assert _get_schema_version(conn) == CURRENT_SCHEMA_VERSION
             assert "event_seq" in _get_table_columns(conn, "events")
+            event_seq_info = {
+                row["name"]: row
+                for row in conn.execute("PRAGMA table_info(events)").fetchall()
+            }["event_seq"]
+            assert event_seq_info["type"] == "INTEGER"
+            assert event_seq_info["notnull"] == 1
+            assert event_seq_info["dflt_value"] == "0"
+        finally:
+            conn.close()
+
+    def test_migration_v15_to_v16_populated_events_rejects_null_event_seq(self, tmp_path: Path) -> None:
+        """Populated v15 events must migrate to the same NOT NULL shape as fresh DBs."""
+        conn = _make_db(tmp_path)
+        try:
+            conn.executescript(SCHEMA_V1_SQL)
+            conn.execute("PRAGMA user_version = 1")
+            conn.commit()
+
+            apply_pending_migrations(conn, 15)
+            assert _get_schema_version(conn) == 15
+            assert "event_seq" not in _get_table_columns(conn, "events")
+
+            ts = "2026-01-01T00:00:00+00:00"
+            conn.execute(
+                "INSERT INTO issues (id, title, created_at, updated_at) VALUES (?, ?, ?, ?)",
+                ("test-populated-v15", "populated migration", ts, ts),
+            )
+            conn.execute(
+                "INSERT INTO events (issue_id, event_type, actor, created_at) VALUES (?, ?, ?, ?)",
+                ("test-populated-v15", "created", "agent", ts),
+            )
+            conn.execute(
+                "INSERT INTO events (issue_id, event_type, actor, created_at) VALUES (?, ?, ?, ?)",
+                ("test-populated-v15", "heartbeat", "agent", ts),
+            )
+            conn.commit()
+
+            apply_pending_migrations(conn, CURRENT_SCHEMA_VERSION)
+
+            event_seq_info = {
+                row["name"]: row
+                for row in conn.execute("PRAGMA table_info(events)").fetchall()
+            }["event_seq"]
+            assert event_seq_info["notnull"] == 1
+            rows = conn.execute(
+                "SELECT event_type, event_seq FROM events WHERE issue_id = ? ORDER BY id",
+                ("test-populated-v15",),
+            ).fetchall()
+            assert [(row["event_type"], row["event_seq"]) for row in rows] == [
+                ("created", 0),
+                ("heartbeat", 0),
+            ]
+
+            with pytest.raises(sqlite3.IntegrityError):
+                conn.execute(
+                    "INSERT INTO events (issue_id, event_type, actor, created_at, event_seq) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    ("test-populated-v15", "heartbeat", "agent", ts, None),
+                )
+
+            with pytest.raises(sqlite3.IntegrityError):
+                conn.execute(
+                    "INSERT INTO events (issue_id, event_type, actor, created_at, event_seq) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    ("test-populated-v15", "heartbeat", "agent", ts, 0),
+                )
+
+            conn.execute(
+                "INSERT INTO events (issue_id, event_type, actor, created_at, event_seq) "
+                "VALUES (?, ?, ?, ?, ?)",
+                ("test-populated-v15", "heartbeat", "agent", ts, 1),
+            )
+            heartbeat_count = conn.execute(
+                "SELECT COUNT(*) FROM events WHERE issue_id = ? AND event_type = ?",
+                ("test-populated-v15", "heartbeat"),
+            ).fetchone()[0]
+            assert heartbeat_count == 2
         finally:
             conn.close()
 

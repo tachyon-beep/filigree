@@ -51,6 +51,13 @@ def _classify_issue_write_error(exc: BaseException) -> ErrorCode:
     return classify_value_error(str(exc))
 
 
+def _classify_release_claim_error(issue_id: str, exc: BaseException) -> ErrorCode:
+    msg = str(exc)
+    if msg.startswith(f"Cannot release {issue_id}:") and "no assignee set" in msg:
+        return ErrorCode.CONFLICT
+    return _classify_issue_write_error(exc)
+
+
 def _claim_conflict_details(exc: ClaimConflictError) -> dict[str, Any]:
     return {"issue_id": exc.issue_id, "observed": exc.observed, "expected": exc.expected}
 
@@ -541,6 +548,8 @@ def create_classic_router() -> APIRouter:
             issue = db.reopen_issue(issue_id, actor=actor)
         except KeyError:
             return _error_response(f"Issue not found: {issue_id}", ErrorCode.NOT_FOUND, 404)
+        except WrongProjectError as e:
+            return _error_response(e.safe_message, ErrorCode.VALIDATION, 400)
         except ValueError as e:
             code = classify_value_error(str(e))
             return _error_response(str(e), code, errorcode_to_http_status(code))
@@ -739,6 +748,8 @@ def create_classic_router() -> APIRouter:
             )
         except TypeError as e:
             return _error_response(str(e), ErrorCode.VALIDATION, 400)
+        except WrongProjectError as e:
+            return _error_response(e.safe_message, ErrorCode.VALIDATION, 400)
         except ValueError as e:
             return _error_response(str(e), ErrorCode.VALIDATION, 400)
         return JSONResponse(issue.to_dict(), status_code=201)
@@ -800,7 +811,8 @@ def create_classic_router() -> APIRouter:
         except ClaimConflictError as e:
             return _error_response(str(e), ErrorCode.CONFLICT, 409, _claim_conflict_details(e))
         except ValueError as e:
-            return _error_response(str(e), ErrorCode.CONFLICT, 409)
+            code = _classify_release_claim_error(issue_id, e)
+            return _error_response(str(e), code, errorcode_to_http_status(code), _issue_write_error_details(e))
         return JSONResponse(issue.to_dict())
 
     @router.post("/claim-next")
@@ -1223,6 +1235,8 @@ def create_loom_router() -> APIRouter:
                 deps=body.get("deps"),
                 actor=actor,
             )
+        except WrongProjectError as e:
+            return _error_response(e.safe_message, ErrorCode.VALIDATION, 400)
         except (TypeError, ValueError) as e:
             return _error_response(str(e), ErrorCode.VALIDATION, 400)
         return JSONResponse(issue_to_loom(issue), status_code=201)
@@ -1346,6 +1360,8 @@ def create_loom_router() -> APIRouter:
             issue = db.reopen_issue(issue_id, actor=actor)
         except KeyError:
             return _error_response(f"Issue not found: {issue_id}", ErrorCode.NOT_FOUND, 404)
+        except WrongProjectError as e:
+            return _error_response(e.safe_message, ErrorCode.VALIDATION, 400)
         except ValueError as e:
             code = classify_value_error(str(e))
             return _error_response(str(e), code, errorcode_to_http_status(code))
@@ -1408,7 +1424,8 @@ def create_loom_router() -> APIRouter:
         except ClaimConflictError as e:
             return _error_response(str(e), ErrorCode.CONFLICT, 409, _claim_conflict_details(e))
         except ValueError as e:
-            return _error_response(str(e), ErrorCode.CONFLICT, 409)
+            code = _classify_release_claim_error(issue_id, e)
+            return _error_response(str(e), code, errorcode_to_http_status(code), _issue_write_error_details(e))
         return JSONResponse(issue_to_loom(issue))
 
     @router.post("/claim-next")

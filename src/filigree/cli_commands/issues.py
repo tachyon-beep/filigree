@@ -39,6 +39,28 @@ _MAX_SQLITE_OFFSET = 9_223_372_036_854_775_807
 _MAX_SQLITE_OVERFETCH_LIMIT = _MAX_SQLITE_OFFSET - 1
 
 
+def _log_transition_enrichment_failure(issue_id: str, exc: Exception) -> None:
+    if isinstance(exc, KeyError):
+        logger.debug("Issue %s disappeared while enriching invalid-transition payload", issue_id, exc_info=True)
+        return
+    logger.warning("Failed to enrich invalid-transition payload for %s", issue_id, exc_info=True)
+
+
+def _transition_error_payload(db: Any, issue_id: str, exc: BaseException) -> dict[str, Any]:
+    payload: dict[str, Any] = {"error": str(exc), "code": ErrorCode.INVALID_TRANSITION}
+    if isinstance(exc, InvalidTransitionError) and exc.valid_transitions is not None:
+        payload["valid_transitions"] = exc.valid_transitions
+        payload["hint"] = "Use get_valid_transitions to see allowed state changes"
+        return payload
+    try:
+        transitions = db.get_valid_transitions(issue_id)
+        payload["valid_transitions"] = [{"to": t.to, "category": t.category, "ready": t.ready} for t in transitions]
+        payload["hint"] = "Use get_valid_transitions to see allowed state changes"
+    except Exception as enrich_exc:
+        _log_transition_enrichment_failure(issue_id, enrich_exc)
+    return payload
+
+
 def _range_check_int(value: int | None, name: str, *, min_val: int, max_val: int, as_json: bool) -> None:
     """Validate that ``value`` (when not ``None``) sits in ``[min_val, max_val]``.
 
@@ -465,11 +487,20 @@ def _update_impl(
             else:
                 click.echo(f"Not found: {issue_id}", err=True)
             sys.exit(1)
+        except InvalidTransitionError as e:
+            if as_json:
+                click.echo(json_mod.dumps(_transition_error_payload(db, issue_id, e)))
+            else:
+                click.echo(f"Error: {e}", err=True)
+            sys.exit(1)
         except ValueError as e:
             if as_json:
                 msg = str(e)
                 code = ErrorCode.CONFLICT if isinstance(e, ClaimConflictError) else classify_value_error(msg)
-                click.echo(json_mod.dumps({"error": str(e), "code": code}))
+                if code == ErrorCode.INVALID_TRANSITION:
+                    click.echo(json_mod.dumps(_transition_error_payload(db, issue_id, e)))
+                else:
+                    click.echo(json_mod.dumps({"error": msg, "code": code}))
             else:
                 click.echo(f"Error: {e}", err=True)
             sys.exit(1)
@@ -859,8 +890,8 @@ def _release_impl(
                         transitions = db.get_valid_transitions(issue_id)
                         payload["valid_transitions"] = [{"to": t.to, "category": t.category, "ready": t.ready} for t in transitions]
                         payload["hint"] = "Use get_valid_transitions to see allowed state changes"
-                    except Exception:
-                        logger.debug("Could not resolve transitions for %s", issue_id, exc_info=True)
+                    except Exception as enrich_exc:
+                        _log_transition_enrichment_failure(issue_id, enrich_exc)
                 click.echo(json_mod.dumps(payload))
             else:
                 click.echo(f"Error: {e}", err=True)
@@ -1260,8 +1291,8 @@ def start_work(
                                 {"to": t.to, "category": t.category, "ready": t.ready} for t in transitions
                             ]
                             transition_payload["hint"] = "Use get_valid_transitions to see allowed state changes"
-                        except Exception:
-                            logger.debug("Could not resolve transitions for %s", issue_id, exc_info=True)
+                        except Exception as enrich_exc:
+                            _log_transition_enrichment_failure(issue_id, enrich_exc)
                 click.echo(json_mod.dumps(transition_payload))
             else:
                 click.echo(f"Error: {e}", err=True)
@@ -1287,9 +1318,9 @@ def start_work(
                             transitions = db.get_valid_transitions(issue_id)
                             payload["valid_transitions"] = [{"to": t.to, "category": t.category, "ready": t.ready} for t in transitions]
                             payload["hint"] = "Use get_valid_transitions to see allowed state changes"
-                        except Exception:
+                        except Exception as enrich_exc:
                             # Enrichment is best-effort — must never mask the original error.
-                            logger.debug("Could not resolve transitions for %s", issue_id, exc_info=True)
+                            _log_transition_enrichment_failure(issue_id, enrich_exc)
                     click.echo(json_mod.dumps(payload))
                 else:
                     click.echo(json_mod.dumps({"error": msg, "code": ErrorCode.CONFLICT}))

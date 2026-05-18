@@ -18,6 +18,12 @@ from tests.mcp._helpers import _parse
 pytestmark = pytest.mark.asyncio
 
 
+def _assert_wrong_project_payload(result: dict[str, object]) -> None:
+    assert result["code"] == ErrorCode.VALIDATION
+    assert result["error"] == WrongProjectError.SAFE_MESSAGE
+    assert "other" not in str(result["error"])
+
+
 class TestAddEntityAssociationMCP:
     async def test_attach_returns_row(self, mcp_db: FiligreeDB) -> None:
         issue = mcp_db.create_issue("Refactor parser", priority=2)
@@ -101,7 +107,7 @@ class TestAddEntityAssociationMCP:
                 },
             )
         )
-        assert result["code"] == ErrorCode.VALIDATION
+        _assert_wrong_project_payload(result)
 
 
 class TestRemoveEntityAssociationMCP:
@@ -140,7 +146,7 @@ class TestRemoveEntityAssociationMCP:
                 {"issue_id": "other-1234567890", "entity_id": "py:func:foo"},
             )
         )
-        assert result["code"] == ErrorCode.VALIDATION
+        _assert_wrong_project_payload(result)
 
 
 class TestListEntityAssociationsMCP:
@@ -182,7 +188,7 @@ class TestListEntityAssociationsMCP:
 
     async def test_list_foreign_prefix_validation(self, mcp_db: FiligreeDB) -> None:
         result = _parse(await call_tool("list_entity_associations", {"issue_id": "other-1234567890"}))
-        assert result["code"] == ErrorCode.VALIDATION
+        _assert_wrong_project_payload(result)
 
 
 class TestListAssociationsByEntityMCP:
@@ -215,22 +221,9 @@ class TestListAssociationsByEntityMCP:
         result = _parse(await call_tool("list_associations_by_entity", {"entity_id": "   "}))
         assert result["code"] == ErrorCode.VALIDATION
 
-    async def test_wrong_project_error_uses_safe_message(
-        self,
-        mcp_db: FiligreeDB,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        def raise_wrong_project(_entity_id: str) -> list[object]:
-            raise WrongProjectError("foreign prefix other does not match mcp")
-
-        monkeypatch.setattr(mcp_db, "list_associations_by_entity", raise_wrong_project)
-
-        result = _parse(await call_tool("list_associations_by_entity", {"entity_id": "py:func:x"}))
-
-        assert result["code"] == ErrorCode.VALIDATION
-        assert result["error"] == WrongProjectError.SAFE_MESSAGE
-        assert "other" not in result["error"]
-        assert "mcp" not in result["error"]
+    async def test_foreign_looking_entity_id_is_opaque_lookup_key(self, mcp_db: FiligreeDB) -> None:
+        result = _parse(await call_tool("list_associations_by_entity", {"entity_id": "other-1234567890"}))
+        assert result == {"associations": []}
 
 
 class TestRoundTrip:

@@ -616,7 +616,7 @@ def migrate_v15_to_v16(conn: sqlite3.Connection) -> None:
     collision, replaying history with all-zero ``event_seq`` is no worse
     than the pre-v16 state.
     """
-    add_column(conn, "events", "event_seq", "INTEGER", "0")
+    add_column(conn, "events", "event_seq", "INTEGER NOT NULL", "0")
     conn.execute("DROP INDEX IF EXISTS idx_events_dedup")
     conn.execute(
         "CREATE UNIQUE INDEX idx_events_dedup ON events("

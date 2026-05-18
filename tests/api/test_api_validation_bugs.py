@@ -729,3 +729,63 @@ class TestWriteRoutesWrongProjectError:
         from filigree.core import WrongProjectError
 
         assert body["error"] == WrongProjectError.SAFE_MESSAGE
+
+    @pytest.mark.parametrize(
+        ("method", "path", "json_body", "foreign_fragments"),
+        [
+            ("post", "/api/issue/foreignproj-aaaaaaaa00/reopen", {}, ("foreignproj", "test")),
+            ("post", "/api/loom/issues/foreignproj-aaaaaaaa00/reopen", {}, ("foreignproj", "test")),
+            (
+                "post",
+                "/api/issues",
+                {"title": "bad parent", "parent_id": "foreignproj-aaaaaaaa00"},
+                ("foreignproj", "test"),
+            ),
+            (
+                "post",
+                "/api/loom/issues",
+                {"title": "bad parent", "parent_id": "foreignproj-aaaaaaaa00"},
+                ("foreignproj", "test"),
+            ),
+        ],
+    )
+    async def test_create_and_reopen_wrong_project_errors_use_safe_message(
+        self,
+        client: AsyncClient,
+        method: str,
+        path: str,
+        json_body: dict[str, str],
+        foreign_fragments: tuple[str, ...],
+    ) -> None:
+        from filigree.core import WrongProjectError
+
+        resp = await getattr(client, method)(path, json=json_body)
+
+        assert resp.status_code == 400, resp.text
+        body = resp.json()
+        assert body["code"] == "VALIDATION", body
+        assert body["error"] == WrongProjectError.SAFE_MESSAGE
+        for fragment in foreign_fragments:
+            assert fragment not in body["error"], body
+
+
+class TestReleaseClaimErrorRouting:
+    async def test_residual_value_error_is_validation_for_classic_and_loom_release(
+        self,
+        bug_db: FiligreeDB,
+        client: AsyncClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        issue = bug_db.create_issue("Release validation route", priority=2)
+
+        def raise_validation(*_args: object, **_kwargs: object) -> object:
+            raise ValueError("synthetic validation failure")
+
+        monkeypatch.setattr(bug_db, "release_claim", raise_validation)
+
+        for path in (f"/api/issue/{issue.id}/release", f"/api/loom/issues/{issue.id}/release"):
+            resp = await client.post(path, json={"actor": "agent"})
+            body = resp.json()
+            assert resp.status_code == 400
+            assert body["code"] == "VALIDATION"
+            assert body["error"] == "synthetic validation failure"

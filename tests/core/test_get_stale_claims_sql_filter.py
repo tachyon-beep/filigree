@@ -152,3 +152,29 @@ def test_get_stale_claims_legacy_null_row_with_fresh_heartbeat_is_not_stale(db: 
 
     stale_ids = [i.id for i in db.get_stale_claims(stale_after_hours=48)]
     assert issue.id not in stale_ids
+
+
+def test_get_stale_claims_malformed_expiry_uses_python_fallback(db: FiligreeDB) -> None:
+    """Malformed non-NULL claim expiry text must not hide rows from fallback."""
+    now = datetime.now(UTC)
+    old = (now - timedelta(days=10)).isoformat()
+    fresh = (now - timedelta(minutes=10)).isoformat()
+
+    stale_issue = db.create_issue("malformed expiry stale fallback", priority=0)
+    fresh_issue = db.create_issue("malformed expiry fresh fallback", priority=0)
+    db.claim_issue(stale_issue.id, assignee="stale-agent")
+    db.claim_issue(fresh_issue.id, assignee="fresh-agent")
+    db.conn.execute(
+        "UPDATE issues SET claim_expires_at = ?, last_heartbeat_at = ?, claimed_at = ?, updated_at = ? WHERE id = ?",
+        ("not-a-date", old, old, old, stale_issue.id),
+    )
+    db.conn.execute(
+        "UPDATE issues SET claim_expires_at = ?, last_heartbeat_at = ?, claimed_at = ?, updated_at = ? WHERE id = ?",
+        ("", fresh, fresh, fresh, fresh_issue.id),
+    )
+    db.conn.commit()
+
+    stale_ids = [i.id for i in db.get_stale_claims(stale_after_hours=48)]
+
+    assert stale_issue.id in stale_ids
+    assert fresh_issue.id not in stale_ids

@@ -44,6 +44,55 @@ def test_immediate_transaction_decorator_rolls_back_on_exception(db: FiligreeDB)
     assert db.conn.in_transaction is False
 
 
+def test_immediate_transaction_decorator_rolls_back_when_commit_is_busy() -> None:
+    """A COMMIT-time SQLITE_BUSY must rollback before the outer retry runs."""
+
+    class FakeConn:
+        def __init__(self) -> None:
+            self.in_transaction = False
+            self.commits = 0
+            self.rollbacks = 0
+            self.begins = 0
+
+        def execute(self, sql: str) -> None:
+            assert sql == "BEGIN IMMEDIATE"
+            if self.in_transaction:
+                msg = "cannot start a transaction within a transaction"
+                raise RuntimeError(msg)
+            self.in_transaction = True
+            self.begins += 1
+
+        def commit(self) -> None:
+            self.commits += 1
+            if self.commits == 1:
+                raise _sqlite_operational_error("database is locked", sqlite3.SQLITE_BUSY)
+            self.in_transaction = False
+
+        def rollback(self) -> None:
+            self.rollbacks += 1
+            self.in_transaction = False
+
+    class Owner:
+        def __init__(self) -> None:
+            self.conn = FakeConn()
+            self.calls = 0
+
+    @_retry_busy(attempts=2, base=0.01, sleep=lambda _: None)
+    @_in_immediate_tx("commit_busy_op")
+    def op(self: Owner) -> int:
+        self.calls += 1
+        return self.calls
+
+    owner = Owner()
+
+    assert op(owner) == 2
+    assert owner.calls == 2
+    assert owner.conn.begins == 2
+    assert owner.conn.commits == 2
+    assert owner.conn.rollbacks == 1
+    assert owner.conn.in_transaction is False
+
+
 def test_immediate_transaction_decorator_skip_begin_is_passthrough(db: FiligreeDB) -> None:
     """``_skip_begin=True`` makes the decorator a no-op for tx lifecycle."""
 

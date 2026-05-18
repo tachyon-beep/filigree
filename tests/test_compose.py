@@ -266,3 +266,27 @@ class TestStartNextWork:
         changes = db.get_events_since("2000-01-01T00:00:00+00:00", issue_id=issue.id, limit=20)
         assert [e["event_type"] for e in changes if e["event_type"] == "claimed"] == ["claimed"]
         assert [e["event_type"] for e in changes if e["event_type"] == "released"] == []
+
+    def test_claim_phase_validation_bug_propagates(self, db: FiligreeDB, monkeypatch: pytest.MonkeyPatch) -> None:
+        """start_next_work must not turn arbitrary claim ValueError into no work."""
+        db.create_issue("d6-next-claim-bug", type="task", priority=0)
+
+        def fail_claim(*args: object, **kwargs: object) -> None:
+            raise ValueError("claim invariant exploded")
+
+        monkeypatch.setattr(db, "claim_issue", fail_claim)
+
+        with pytest.raises(ValueError, match="claim invariant exploded"):
+            db.start_next_work(assignee="alice", actor="alice")
+
+    def test_claim_phase_invalid_transition_propagates(self, db: FiligreeDB, monkeypatch: pytest.MonkeyPatch) -> None:
+        """InvalidTransitionError is a ValueError subclass, not a candidate race."""
+        db.create_issue("d6-next-claim-transition-bug", type="task", priority=0)
+
+        def fail_claim(*args: object, **kwargs: object) -> None:
+            raise InvalidTransitionError("task", "open")
+
+        monkeypatch.setattr(db, "claim_issue", fail_claim)
+
+        with pytest.raises(InvalidTransitionError):
+            db.start_next_work(assignee="alice", actor="alice")

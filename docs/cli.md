@@ -456,7 +456,8 @@ Claim the highest-priority ready issue.
 Release a claimed issue by clearing its assignee without changing status. By default this is strict: releasing an
 unassigned issue returns a conflict. Use `--if-held` for idempotent cleanup flows; it no-ops when the issue is
 already unassigned and only clears a live claim held by `--expected-assignee`, or by the global `--actor` when no
-expected assignee is provided.
+expected assignee is provided. If another actor holds the claim, the command returns `CONFLICT`; do not treat that
+as a cleanup no-op.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -1329,6 +1330,8 @@ but they are too broad for final cleanup by themselves.
 2. Preview live claim cleanup:
    `filigree --actor <agent> release-my-claims --label <session-label> --dry-run`.
    If the preview is correct, repeat without `--dry-run` and include `--reason`.
+   A held-by-other mismatch is a conflict and should be investigated or retried
+   with an explicit coordinator override, not ignored as an idempotent no-op.
 3. Triage observations with `list-observations --actor <agent>`, then choose
    `promote-observations-to-issue`, `batch-link-observations`, or
    `batch-dismiss-observations` so each pending note is tracked, attached as

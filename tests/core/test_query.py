@@ -10,6 +10,13 @@ import pytest
 from filigree.core import FiligreeDB
 
 
+def _sqlite_operational_error(message: str, code: int | None = None) -> sqlite3.OperationalError:
+    exc = sqlite3.OperationalError(message)
+    if code is not None:
+        exc.sqlite_errorcode = code  # type: ignore[attr-defined]
+    return exc
+
+
 class TestListAndSearch:
     def test_list_all(self, db: FiligreeDB) -> None:
         baseline = len(db.list_issues())  # Future release singleton
@@ -272,6 +279,42 @@ class TestSearchFTSFallback:
                 return original_execute(sql, params)
 
         with patch.object(db, "_conn", _SpyConn()), pytest.raises(sqlite3.OperationalError, match="malformed"):
+            db.search_issues("Searchable")
+
+    def test_fts_unavailable_uses_sqlite_errorcode_not_message(self, db: FiligreeDB) -> None:
+        db.create_issue("Searchable notification item")
+
+        original_execute = db.conn.execute
+
+        class _NoFTS:
+            def __getattr__(self, name: str) -> object:
+                return getattr(db._conn, name)
+
+            def execute(self, sql: str, params: tuple[object, ...] = ()) -> sqlite3.Cursor:
+                if "issues_fts" in sql and "MATCH" in sql:
+                    raise _sqlite_operational_error("custom extension loader failed", sqlite3.SQLITE_ERROR)
+                return original_execute(sql, params)
+
+        with patch.object(db, "_conn", _NoFTS()):
+            results = db.search_issues("notification")
+
+        assert [issue.title for issue in results] == ["Searchable notification item"]
+
+    def test_non_fts_error_code_propagates_even_with_legacy_message(self, db: FiligreeDB) -> None:
+        db.create_issue("Searchable item")
+
+        original_execute = db.conn.execute
+
+        class _CorruptFTS:
+            def __getattr__(self, name: str) -> object:
+                return getattr(db._conn, name)
+
+            def execute(self, sql: str, params: tuple[object, ...] = ()) -> sqlite3.Cursor:
+                if "issues_fts" in sql and "MATCH" in sql:
+                    raise _sqlite_operational_error("no such table: issues_fts", sqlite3.SQLITE_CORRUPT)
+                return original_execute(sql, params)
+
+        with patch.object(db, "_conn", _CorruptFTS()), pytest.raises(sqlite3.OperationalError, match="no such table"):
             db.search_issues("Searchable")
 
 
@@ -592,6 +635,44 @@ class TestCountSearchResults:
         with patch.object(db, "_conn", _NoFTS()):
             count = db.count_search_results("notification")
         assert count == 2
+
+    def test_fts_unavailable_uses_sqlite_errorcode_not_message(self, db: FiligreeDB) -> None:
+        db.create_issue("Fix notification system")
+        db.create_issue("Another notification task")
+        db.create_issue("Unrelated task")
+
+        original_execute = db.conn.execute
+
+        class _NoFTS:
+            def __getattr__(self, name: str) -> object:
+                return getattr(db._conn, name)
+
+            def execute(self, sql: str, params: tuple[object, ...] = ()) -> sqlite3.Cursor:
+                if "issues_fts" in sql and "MATCH" in sql:
+                    raise _sqlite_operational_error("custom extension loader failed", sqlite3.SQLITE_ERROR)
+                return original_execute(sql, params)
+
+        with patch.object(db, "_conn", _NoFTS()):
+            count = db.count_search_results("notification")
+
+        assert count == 2
+
+    def test_non_fts_error_code_propagates_even_with_legacy_message(self, db: FiligreeDB) -> None:
+        db.create_issue("Fix notification system")
+
+        original_execute = db.conn.execute
+
+        class _CorruptFTS:
+            def __getattr__(self, name: str) -> object:
+                return getattr(db._conn, name)
+
+            def execute(self, sql: str, params: tuple[object, ...] = ()) -> sqlite3.Cursor:
+                if "issues_fts" in sql and "MATCH" in sql:
+                    raise _sqlite_operational_error("no such table: issues_fts", sqlite3.SQLITE_CORRUPT)
+                return original_execute(sql, params)
+
+        with patch.object(db, "_conn", _CorruptFTS()), pytest.raises(sqlite3.OperationalError, match="no such table"):
+            db.count_search_results("notification")
 
     def test_special_character_sanitization(self, db: FiligreeDB) -> None:
         """Special chars in query don't cause errors and valid tokens still match."""
