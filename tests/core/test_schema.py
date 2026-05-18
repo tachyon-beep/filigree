@@ -276,10 +276,7 @@ class TestEntityAssociationsSchema:
 
             assert _get_schema_version(conn) == CURRENT_SCHEMA_VERSION
             assert "event_seq" in _get_table_columns(conn, "events")
-            event_seq_info = {
-                row["name"]: row
-                for row in conn.execute("PRAGMA table_info(events)").fetchall()
-            }["event_seq"]
+            event_seq_info = {row["name"]: row for row in conn.execute("PRAGMA table_info(events)").fetchall()}["event_seq"]
             assert event_seq_info["type"] == "INTEGER"
             assert event_seq_info["notnull"] == 1
             assert event_seq_info["dflt_value"] == "0"
@@ -315,10 +312,7 @@ class TestEntityAssociationsSchema:
 
             apply_pending_migrations(conn, CURRENT_SCHEMA_VERSION)
 
-            event_seq_info = {
-                row["name"]: row
-                for row in conn.execute("PRAGMA table_info(events)").fetchall()
-            }["event_seq"]
+            event_seq_info = {row["name"]: row for row in conn.execute("PRAGMA table_info(events)").fetchall()}["event_seq"]
             assert event_seq_info["notnull"] == 1
             rows = conn.execute(
                 "SELECT event_type, event_seq FROM events WHERE issue_id = ? ORDER BY id",
@@ -331,21 +325,18 @@ class TestEntityAssociationsSchema:
 
             with pytest.raises(sqlite3.IntegrityError):
                 conn.execute(
-                    "INSERT INTO events (issue_id, event_type, actor, created_at, event_seq) "
-                    "VALUES (?, ?, ?, ?, ?)",
+                    "INSERT INTO events (issue_id, event_type, actor, created_at, event_seq) VALUES (?, ?, ?, ?, ?)",
                     ("test-populated-v15", "heartbeat", "agent", ts, None),
                 )
 
             with pytest.raises(sqlite3.IntegrityError):
                 conn.execute(
-                    "INSERT INTO events (issue_id, event_type, actor, created_at, event_seq) "
-                    "VALUES (?, ?, ?, ?, ?)",
+                    "INSERT INTO events (issue_id, event_type, actor, created_at, event_seq) VALUES (?, ?, ?, ?, ?)",
                     ("test-populated-v15", "heartbeat", "agent", ts, 0),
                 )
 
             conn.execute(
-                "INSERT INTO events (issue_id, event_type, actor, created_at, event_seq) "
-                "VALUES (?, ?, ?, ?, ?)",
+                "INSERT INTO events (issue_id, event_type, actor, created_at, event_seq) VALUES (?, ?, ?, ?, ?)",
                 ("test-populated-v15", "heartbeat", "agent", ts, 1),
             )
             heartbeat_count = conn.execute(

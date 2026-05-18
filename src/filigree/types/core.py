@@ -56,6 +56,7 @@ def make_content_hash(value: str) -> ContentHash:
         raise ValueError(msg)
     return ContentHash(value)
 
+
 # Constrained-string Literal types — canonical definitions.
 # core.py re-exports these; db_files.py derives frozensets via get_args().
 Severity = Literal["critical", "high", "medium", "low", "info"]
