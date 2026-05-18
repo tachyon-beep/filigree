@@ -1416,13 +1416,23 @@ class IssuesMixin(DBMixinProtocol):
         stale_after_hours: int = DEFAULT_CLAIM_LEASE_HOURS,
         expires_within_hours: int | None = None,
     ) -> list[Issue]:
-        """Return assigned, non-done issues whose ownership appears abandoned or near expiry."""
+        """Return assigned, non-done issues whose ownership appears abandoned or near expiry.
+
+        Modern rows (``claim_expires_at IS NOT NULL``) have their expiry
+        check pushed into the WHERE clause so a polling agent that runs
+        ``get_stale_claims`` every N seconds does not scan every assigned
+        row in Python (2.1.0 §2.3). The legacy fallback — heartbeat /
+        claimed / updated timestamp against ``stale_after_hours`` — still
+        runs in Python for rows whose ``claim_expires_at`` is NULL
+        (created before 2.0's lease columns landed).
+        """
         _validate_lease_hours(stale_after_hours)
         if expires_within_hours is not None:
             _validate_lease_hours(expires_within_hours, name="expires_within_hours")
         now = datetime.now(UTC)
         cutoff = now - timedelta(hours=stale_after_hours)
-        expiry_cutoff = now + timedelta(hours=expires_within_hours) if expires_within_hours is not None else None
+        # SQL cutoff: matches expired-now and (if requested) near-expiry rows.
+        expiry_cutoff_iso = (now + timedelta(hours=expires_within_hours or 0)).isoformat()
 
         pred_sql, pred_params = self._category_predicate_sql("done", type_col="i.type", status_col="i.status")
         rows = self.conn.execute(
@@ -1430,18 +1440,27 @@ class IssuesMixin(DBMixinProtocol):
             "FROM issues i "
             "WHERE COALESCE(i.assignee, '') != '' "
             f"AND NOT ({pred_sql}) "
+            "AND ("
+            "  (i.claim_expires_at IS NOT NULL AND datetime(i.claim_expires_at) <= datetime(?))"
+            "  OR i.claim_expires_at IS NULL"
+            ") "
             "ORDER BY i.priority ASC, i.created_at ASC, i.id ASC",
-            pred_params,
+            [*pred_params, expiry_cutoff_iso],
         ).fetchall()
 
         stale_ids: list[str] = []
         for row in rows:
-            expires_at = _parse_issue_timestamp(row["claim_expires_at"])
-            if expires_at is not None:
-                if expires_at <= now or (expiry_cutoff is not None and expires_at <= expiry_cutoff):
-                    stale_ids.append(row["id"])
+            # Modern rows: the SQL filter already says this row is stale-or-
+            # near-expiry, so include unconditionally. The Python parse
+            # remains for the rare clock-skew edge where SQLite's UTC
+            # arithmetic disagrees with Python's by sub-second jitter and
+            # we want to defensively re-confirm; if the parse fails we
+            # still include (errs toward visibility).
+            if row["claim_expires_at"] is not None:
+                stale_ids.append(row["id"])
                 continue
 
+            # Legacy fallback for rows predating the claim_expires_at column.
             basis = (
                 _parse_issue_timestamp(row["last_heartbeat_at"])
                 or _parse_issue_timestamp(row["claimed_at"])

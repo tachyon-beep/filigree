@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`get_stale_claims` pushes the modern lease-expiry check into SQL
+  (2.1.0 §2.3).** Rows with `claim_expires_at IS NOT NULL` are now
+  filtered via `datetime(claim_expires_at) <= datetime(?)` in the
+  WHERE clause, so a polling agent calling `get_stale_claims` every N
+  seconds no longer scans every assigned non-done row through Python's
+  `_parse_issue_timestamp`. The Python fallback path is preserved for
+  legacy rows (`claim_expires_at IS NULL`) that predate 2.0's lease
+  columns — those still use the `last_heartbeat_at` / `claimed_at` /
+  `updated_at` comparison against `stale_after_hours`. Closes
+  embedded-db H4 from the 2.1.0 panel review.
+
 - **`start_work` / `start_next_work` hold the writer lock only across the
   claim+update composite (2.1.0 §2.2).** Candidate discovery
   (`get_ready`) and per-candidate template lookups
