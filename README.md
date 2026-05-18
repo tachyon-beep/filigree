@@ -17,6 +17,8 @@ Traditional issue trackers are human-first — agents scrape CLI output or parse
 
 Filigree is local-first. No cloud, no accounts. Each project gets a `.filigree/` directory (like `.git/`) containing a SQLite database, configuration, and auto-generated context summary. Installations support two modes: `ethereal` (default, per-project) and `server` (persistent multi-project daemon). Filigree 2.0 also adds a named Loom HTTP generation at `/api/loom/*` for federation-aware integrations while keeping the classic HTTP surface supported for existing callers.
 
+**Security boundary:** Filigree does not encrypt, sandbox, harden, or secure stored project data beyond ordinary filesystem permissions and standard HTTPS transport if you put it behind HTTPS yourself. Do not use Filigree for secure, regulated, confidential, or business-sensitive data.
+
 ### Key Features
 
 - **MCP server** with 113 tools — agents interact natively without parsing text
@@ -86,6 +88,9 @@ The session hook runs `filigree session-context` at startup, giving the agent a 
 
 Filigree is designed for a specific niche: local-first, agent-driven development. It is not a replacement for GitHub Issues or Jira.
 
+**Is Filigree suitable for my project?**
+Use Filigree when your priority is plug-and-play agent coordination: install it, run `filigree init` and `filigree install`, open your agent, and immediately get project context, tickets, scanner findings, and local workflow tools. Do not use Filigree when the issue database, comments, scans, or integrations would contain secrets, regulated data, customer data, confidential business information, or anything that must be encrypted or access-controlled beyond normal local filesystem protections and HTTPS transport you provide yourself.
+
 | Feature | Filigree | GitHub Issues | Jira |
 |---------|----------|---------------|------|
 | Agent-native MCP tools | Yes | No | No |
@@ -114,6 +119,9 @@ The web dashboard supports switching between local projects, but Filigree has no
 
 **Mobile or browser-based access.**
 The dashboard runs on localhost. If stakeholders need to read or file issues from their phone or a machine where the project is not checked out, Filigree is not the right choice.
+
+**Secure or sensitive data.**
+Nothing in Filigree is encrypted or secured beyond ordinary local filesystem protections and standard HTTPS if you provide it. Do not use this system for secure or sensitive data.
 
 **The sweet spot**: one developer or agent team, one project, offline or airgapped, where you want structured workflow enforcement and agent-native tooling without standing up external infrastructure.
 
