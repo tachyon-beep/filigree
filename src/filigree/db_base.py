@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import functools
+import inspect
 import json
 import logging
 import sqlite3
+import time
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any, ParamSpec, Protocol, TypeVar
 
 from filigree.models import FileRecord, Issue
 from filigree.types.core import AssocType, ISOTimestamp, ScanRunStatus, StatusCategory
@@ -30,10 +34,15 @@ __all__ = [
     "_begin_immediate",
     "_escape_like",
     "_escape_like_chars",
+    "_in_immediate_tx",
     "_normalize_iso_to_utc",
     "_now_iso",
+    "_retry_busy",
     "_safe_json_loads",
 ]
+
+_P = ParamSpec("_P")
+_R = TypeVar("_R")
 
 # Virtual label dispatch — explicit allowlist, no prefix matching
 AGE_BUCKETS: dict[str, tuple[int, int]] = {
@@ -54,6 +63,111 @@ def _begin_immediate(conn: sqlite3.Connection, operation: str) -> None:
     if conn.in_transaction:
         raise RuntimeError(f"{operation}: nested transaction not supported; commit or roll back the active transaction first")
     conn.execute("BEGIN IMMEDIATE")
+
+
+def _in_immediate_tx(operation: str) -> Callable[[Callable[..., _R]], Callable[..., _R]]:
+    """Wrap a public write method in BEGIN IMMEDIATE + commit/rollback lifecycle.
+
+    The decorator consumes a ``_skip_begin=False`` kwarg from the caller — it
+    is NOT forwarded to the wrapped function. When ``_skip_begin=True``, the
+    decorator is a pass-through: no BEGIN, no COMMIT, no ROLLBACK. Use this
+    when the wrapped method is invoked inside an outer caller's transaction
+    (e.g. ``start_work`` → ``claim_issue``); the outer owner remains
+    responsible for tx lifecycle.
+
+    Catches ``Exception`` (not ``BaseException``) so SystemExit /
+    KeyboardInterrupt propagate without an interposed rollback round-trip
+    (filigree-2.1.0 §2.1).
+    """
+
+    def decorate(fn: Callable[..., _R]) -> Callable[..., _R]:
+        @functools.wraps(fn)
+        def wrapper(self: Any, *args: Any, _skip_begin: bool = False, **kwargs: Any) -> _R:
+            if _skip_begin:
+                return fn(self, *args, **kwargs)
+            _begin_immediate(self.conn, operation)
+            try:
+                result = fn(self, *args, **kwargs)
+            except Exception:
+                self.conn.rollback()
+                raise
+            self.conn.commit()
+            return result
+
+        # Expose ``_skip_begin`` in the wrapper's introspectable signature so
+        # ``inspect.signature`` (which follows ``__wrapped__`` by default) and
+        # the mixin-contract test see the kwarg the wrapper actually accepts.
+        wrapper.__signature__ = _augment_signature_with_skip_begin(fn)  # type: ignore[attr-defined]
+        return wrapper
+
+    return decorate
+
+
+def _augment_signature_with_skip_begin(fn: Callable[..., Any]) -> inspect.Signature:
+    """Return ``fn``'s signature with ``_skip_begin: bool = False`` appended.
+
+    No-op if the parameter is already present.
+    """
+    sig = inspect.signature(fn)
+    if "_skip_begin" in sig.parameters:
+        return sig
+    params = list(sig.parameters.values())
+    params.append(
+        inspect.Parameter(
+            "_skip_begin",
+            inspect.Parameter.KEYWORD_ONLY,
+            default=False,
+            annotation=bool,
+        )
+    )
+    return sig.replace(parameters=params)
+
+
+def _retry_busy(
+    *,
+    attempts: int = 3,
+    base: float = 0.05,
+    sleep: Callable[[float], None] = time.sleep,
+) -> Callable[[Callable[..., _R]], Callable[..., _R]]:
+    """Retry a wrapped op on transient ``SQLITE_BUSY`` / ``SQLITE_LOCKED``.
+
+    Catches ``sqlite3.OperationalError`` whose message contains "database is
+    locked" or "database is busy", sleeps ``base * 2 ** attempt`` seconds,
+    and retries up to ``attempts`` times. Other ``OperationalError``
+    subclasses propagate. After the budget is exhausted the original
+    exception is re-raised so call sites surface a real lock failure rather
+    than a synthetic RuntimeError.
+
+    Pass-through when ``_skip_begin=True``: the inner call is inside an
+    outer caller's open transaction, where retrying alone cannot recover
+    the lost lock — the BUSY error must propagate to the outer retry
+    decorator, which rolls back the whole composed op and retries from
+    scratch (filigree-2.1.0 §2.1).
+
+    The ``sleep`` parameter is injectable for tests that simulate
+    contention without burning wall time.
+    """
+
+    def decorate(fn: Callable[..., _R]) -> Callable[..., _R]:
+        @functools.wraps(fn)
+        def wrapper(self: Any, *args: Any, **kwargs: Any) -> _R:
+            if kwargs.get("_skip_begin"):
+                return fn(self, *args, **kwargs)
+            for attempt in range(attempts):
+                try:
+                    return fn(self, *args, **kwargs)
+                except sqlite3.OperationalError as exc:
+                    msg = str(exc).lower()
+                    if "database is locked" not in msg and "database is busy" not in msg:
+                        raise
+                    if attempt == attempts - 1:
+                        raise
+                    sleep(base * (2**attempt))
+            raise RuntimeError("unreachable")  # pragma: no cover
+
+        return wrapper
+
+    return decorate
 
 
 def _normalize_iso_to_utc(raw: object) -> str | None:
@@ -223,6 +337,7 @@ class DBMixinProtocol(Protocol):
         labels: list[str] | None = None,
         deps: list[str] | None = None,
         actor: str = "",
+        _skip_begin: bool = False,
     ) -> Issue: ...
 
     def update_issue(
@@ -240,6 +355,7 @@ class DBMixinProtocol(Protocol):
         actor: str = "",
         expected_assignee: str | None = None,
         _skip_transition_check: bool = False,
+        _skip_begin: bool = False,
     ) -> Issue: ...
 
     def list_issues(

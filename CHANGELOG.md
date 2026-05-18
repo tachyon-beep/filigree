@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Every write method on `IssuesMixin` now begins `BEGIN IMMEDIATE`
+  before the first SQL statement and retries transient `SQLITE_BUSY` /
+  `SQLITE_LOCKED` (2.1.0 §2.1).** New `@_in_immediate_tx("op_name")` and
+  `@_retry_busy(attempts=3, base=0.05)` decorators in `db_base.py` own
+  the BEGIN/COMMIT/ROLLBACK lifecycle plus exponential backoff. Applied
+  to `create_issue`, `update_issue`, `claim_issue`, `heartbeat_work`,
+  `reclaim_issue`, `start_work`, and `start_next_work`. Composed callers
+  pass `_skip_begin=True` to inner methods so the outer caller's
+  IMMEDIATE transaction is preserved. Removes the prior reliance on
+  Python's implicit DEFERRED-then-write upgrade, which could surface
+  raw `OperationalError` past `busy_timeout=5000` under multi-agent
+  contention. The Phase 0 §0.1 CAS guard inside `update_issue` runs
+  inside the IMMEDIATE transaction unchanged. Closes embedded-db H1 /
+  H2 from the 2.1.0 panel review. Internal API: `claim_issue` and
+  `_claim_next_with_prior` no longer accept a `_commit=` kwarg —
+  composed callers now pass `_skip_begin=True` instead.
+  `_rollback_uncommitted_start_claim` deleted as orphaned (the
+  decorator owns rollback for `start_work` / `start_next_work`).
+
 - **`_record_event` no longer silently dedups same-second collisions
   (2.1.0 §0.2).** The events table grew a new ``event_seq INTEGER NOT
   NULL DEFAULT 0`` column (schema v15 → v16) and the dedup UNIQUE

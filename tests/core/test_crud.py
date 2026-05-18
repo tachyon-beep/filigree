@@ -2590,6 +2590,8 @@ class TestImportJsonlErrorPaths:
                 '{"version": "Future"}',
             ),
         )
+        db.conn.commit()  # Close implicit DEFERRED tx — create_issue's
+        # IMMEDIATE-tx decorator (2.1.0 §2.1) rejects nested BEGINs.
         other = db.create_issue("Other task")
         db.conn.execute(
             "INSERT INTO dependencies (issue_id, depends_on_id, type, created_at) VALUES (?, ?, ?, ?)",

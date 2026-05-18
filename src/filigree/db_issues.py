@@ -16,7 +16,16 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, cast
 
-from filigree.db_base import AGE_BUCKETS, DBMixinProtocol, _escape_like, _escape_like_chars, _now_iso, _safe_json_loads
+from filigree.db_base import (
+    AGE_BUCKETS,
+    DBMixinProtocol,
+    _escape_like,
+    _escape_like_chars,
+    _in_immediate_tx,
+    _now_iso,
+    _retry_busy,
+    _safe_json_loads,
+)
 from filigree.models import Issue
 from filigree.templates import TransitionResult, validate_field_pattern
 from filigree.types.api import BatchFailure, ClaimConflictError, ErrorCode, classify_value_error
@@ -397,6 +406,8 @@ class IssuesMixin(DBMixinProtocol):
 
     # -- Issue CRUD ----------------------------------------------------------
 
+    @_retry_busy()
+    @_in_immediate_tx("create_issue")
     def create_issue(
         self,
         title: str,
@@ -468,51 +479,45 @@ class IssuesMixin(DBMixinProtocol):
         # Determine initial state from template
         initial_state = self.templates.get_initial_state(type)
 
-        try:
-            self.conn.execute(
-                "INSERT INTO issues (id, title, status, priority, type, parent_id, assignee, "
-                "claimed_at, last_heartbeat_at, claim_expires_at, created_at, updated_at, description, notes, fields) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (
-                    issue_id,
-                    title,
-                    initial_state,
-                    priority,
-                    type,
-                    parent_id,
-                    assignee,
-                    claimed_at,
-                    last_heartbeat_at,
-                    claim_expires_at,
-                    now,
-                    now,
-                    description,
-                    notes,
-                    json.dumps(fields),
-                ),
-            )
+        self.conn.execute(
+            "INSERT INTO issues (id, title, status, priority, type, parent_id, assignee, "
+            "claimed_at, last_heartbeat_at, claim_expires_at, created_at, updated_at, description, notes, fields) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                issue_id,
+                title,
+                initial_state,
+                priority,
+                type,
+                parent_id,
+                assignee,
+                claimed_at,
+                last_heartbeat_at,
+                claim_expires_at,
+                now,
+                now,
+                description,
+                notes,
+                json.dumps(fields),
+            ),
+        )
 
-            self._record_event(issue_id, "created", actor=actor, new_value=title)
+        self._record_event(issue_id, "created", actor=actor, new_value=title)
 
-            if labels:
-                labels = list(dict.fromkeys(labels))  # explicit dedup, preserve order
-                for label in labels:
-                    self.conn.execute(
-                        "INSERT INTO labels (issue_id, label) VALUES (?, ?)",
-                        (issue_id, label),
-                    )
+        if labels:
+            labels = list(dict.fromkeys(labels))  # explicit dedup, preserve order
+            for label in labels:
+                self.conn.execute(
+                    "INSERT INTO labels (issue_id, label) VALUES (?, ?)",
+                    (issue_id, label),
+                )
 
-            if deps:
-                for dep_id in deps:
-                    self.conn.execute(
-                        "INSERT OR IGNORE INTO dependencies (issue_id, depends_on_id, type, created_at) VALUES (?, ?, 'blocks', ?)",
-                        (issue_id, dep_id, now),
-                    )
-
-            self.conn.commit()
-        except Exception:
-            self.conn.rollback()
-            raise
+        if deps:
+            for dep_id in deps:
+                self.conn.execute(
+                    "INSERT OR IGNORE INTO dependencies (issue_id, depends_on_id, type, created_at) VALUES (?, ?, 'blocks', ?)",
+                    (issue_id, dep_id, now),
+                )
 
         return self.get_issue(issue_id)
 
@@ -634,6 +639,8 @@ class IssuesMixin(DBMixinProtocol):
             )
         return result
 
+    @_retry_busy()
+    @_in_immediate_tx("update_issue")
     def update_issue(
         self,
         issue_id: str,
@@ -747,184 +754,179 @@ class IssuesMixin(DBMixinProtocol):
                     _close_reason_only = True
                     _close_reason_comment = str(fields.get("close_reason", ""))
 
-        try:
-            if title is not None and title != current.title:
-                self._record_event(issue_id, "title_changed", actor=actor, old_value=current.title, new_value=title)
-                updates.append("title = ?")
-                params.append(title)
+        if title is not None and title != current.title:
+            self._record_event(issue_id, "title_changed", actor=actor, old_value=current.title, new_value=title)
+            updates.append("title = ?")
+            params.append(title)
 
-            if status is not None and status != current.status:
-                # Record soft-enforcement warnings from cached validation result
-                if _transition_result is not None:
-                    _transition_warnings = _transition_data_warnings(_transition_result)
-                    for warning in _transition_warnings:
-                        self._record_event(
-                            issue_id,
-                            "transition_warning",
-                            actor=actor,
-                            old_value=current.status,
-                            new_value=status,
-                            comment=warning,
-                        )
-
-                # 2.1.0 §1.1: when the transition validator was bypassed
-                # the audit trail records a ``transition_forced`` event
-                # alongside the ``status_changed`` so reviewers can find
-                # every workflow shortcut without inferring it from the
-                # absence of a ``transition_warning``. Sequenced before
-                # the status_changed event so the chain is causally
-                # ordered (force → change) when read top-to-bottom.
-                if _skip_transition_check:
+        if status is not None and status != current.status:
+            # Record soft-enforcement warnings from cached validation result
+            if _transition_result is not None:
+                _transition_warnings = _transition_data_warnings(_transition_result)
+                for warning in _transition_warnings:
                     self._record_event(
                         issue_id,
-                        "transition_forced",
+                        "transition_warning",
                         actor=actor,
                         old_value=current.status,
                         new_value=status,
+                        comment=warning,
                     )
 
+            # 2.1.0 §1.1: when the transition validator was bypassed
+            # the audit trail records a ``transition_forced`` event
+            # alongside the ``status_changed`` so reviewers can find
+            # every workflow shortcut without inferring it from the
+            # absence of a ``transition_warning``. Sequenced before
+            # the status_changed event so the chain is causally
+            # ordered (force → change) when read top-to-bottom.
+            if _skip_transition_check:
                 self._record_event(
                     issue_id,
-                    "status_changed",
+                    "transition_forced",
                     actor=actor,
                     old_value=current.status,
                     new_value=status,
-                    comment=_close_reason_comment,
                 )
-                updates.append("status = ?")
-                params.append(status)
 
-                # Set closed_at when entering a done-category state
-                status_cat = self.templates.get_category(current.type, status)
-                is_done = (status_cat or self._infer_status_category(current.type, status)) == "done"
+            self._record_event(
+                issue_id,
+                "status_changed",
+                actor=actor,
+                old_value=current.status,
+                new_value=status,
+                comment=_close_reason_comment,
+            )
+            updates.append("status = ?")
+            params.append(status)
 
-                if is_done:
-                    updates.append("closed_at = ?")
-                    params.append(now)
-                else:
-                    # Clear closed_at when leaving a done-category state
-                    old_cat = self.templates.get_category(current.type, current.status)
-                    if (old_cat or self._infer_status_category(current.type, current.status)) == "done":
-                        updates.append("closed_at = NULL")
+            # Set closed_at when entering a done-category state
+            status_cat = self.templates.get_category(current.type, status)
+            is_done = (status_cat or self._infer_status_category(current.type, status)) == "done"
 
-            if priority is not None and priority != current.priority:
-                self._record_event(
-                    issue_id,
-                    "priority_changed",
-                    actor=actor,
-                    old_value=str(current.priority),
-                    new_value=str(priority),
-                )
-                updates.append("priority = ?")
-                params.append(priority)
-
-            if assignee is not None and assignee != current.assignee:
-                self._record_event(issue_id, "assignee_changed", actor=actor, old_value=current.assignee, new_value=assignee)
-                updates.append("assignee = ?")
-                params.append(assignee)
-                if assignee:
-                    updates.extend(["claimed_at = ?", "last_heartbeat_at = ?", "claim_expires_at = ?"])
-                    params.extend([now, now, _claim_expiry(now)])
-                else:
-                    updates.extend(["claimed_at = NULL", "last_heartbeat_at = NULL", "claim_expires_at = NULL"])
-
-            if description is not None and description != current.description:
-                self._record_event(
-                    issue_id,
-                    "description_changed",
-                    actor=actor,
-                    old_value=current.description,
-                    new_value=description,
-                )
-                updates.append("description = ?")
-                params.append(description)
-
-            if notes is not None and notes != current.notes:
-                self._record_event(
-                    issue_id,
-                    "notes_changed",
-                    actor=actor,
-                    old_value=current.notes,
-                    new_value=notes,
-                )
-                updates.append("notes = ?")
-                params.append(notes)
-
-            if parent_id is not None:
-                if parent_id == "":
-                    # Clear parent
-                    if current.parent_id is not None:
-                        self._record_event(
-                            issue_id,
-                            "parent_changed",
-                            actor=actor,
-                            old_value=current.parent_id or "",
-                            new_value="",
-                        )
-                        updates.append("parent_id = NULL")
-                else:
-                    if parent_id != current.parent_id:
-                        self._record_event(
-                            issue_id,
-                            "parent_changed",
-                            actor=actor,
-                            old_value=current.parent_id or "",
-                            new_value=parent_id,
-                        )
-                        updates.append("parent_id = ?")
-                        params.append(parent_id)
-
-            if fields is not None:
-                # Merge into existing fields
-                merged = {**current.fields, **fields}
-                if merged != current.fields:
-                    if not _close_reason_only:
-                        # Skip the event for the close-with-reason-only path —
-                        # the reason is already audit-trailed on the status_changed
-                        # event's ``comment``. The fields column update still runs
-                        # so ``issue.fields.close_reason`` remains readable.
-                        self._record_event(
-                            issue_id,
-                            "fields_changed",
-                            actor=actor,
-                            old_value=json.dumps(current.fields),
-                            new_value=json.dumps(merged),
-                        )
-                    updates.append("fields = ?")
-                    params.append(json.dumps(merged))
-
-            if updates:
-                updates.append("updated_at = ?")
+            if is_done:
+                updates.append("closed_at = ?")
                 params.append(now)
-                params.append(issue_id)
-                # §0.1 CAS guard: when an assignee was observed at SELECT time,
-                # add ``AND assignee = ?`` so a concurrent reassignment fails
-                # the UPDATE atomically. On rowcount==0 we re-read to
-                # distinguish "row vanished" from "reassigned" and raise
-                # ClaimConflictError (typed CONFLICT, not silent VALIDATION).
-                where = "WHERE id = ?"
-                if _observed_assignee:
-                    where += " AND assignee = ?"
-                    params.append(_observed_assignee)
-                sql = f"UPDATE issues SET {', '.join(updates)} {where}"
-                cursor = self.conn.execute(sql, params)
-                if _observed_assignee and cursor.rowcount == 0:
-                    row = self.conn.execute("SELECT assignee FROM issues WHERE id = ?", (issue_id,)).fetchone()
-                    if row is None:
-                        msg = f"Issue not found: {issue_id}"
-                        raise KeyError(msg)
-                    new_assignee = row["assignee"] or ""
-                    msg = f"Cannot update {issue_id}: reassigned to '{new_assignee}' (expected '{_observed_assignee}')"
-                    raise ClaimConflictError(
+            else:
+                # Clear closed_at when leaving a done-category state
+                old_cat = self.templates.get_category(current.type, current.status)
+                if (old_cat or self._infer_status_category(current.type, current.status)) == "done":
+                    updates.append("closed_at = NULL")
+
+        if priority is not None and priority != current.priority:
+            self._record_event(
+                issue_id,
+                "priority_changed",
+                actor=actor,
+                old_value=str(current.priority),
+                new_value=str(priority),
+            )
+            updates.append("priority = ?")
+            params.append(priority)
+
+        if assignee is not None and assignee != current.assignee:
+            self._record_event(issue_id, "assignee_changed", actor=actor, old_value=current.assignee, new_value=assignee)
+            updates.append("assignee = ?")
+            params.append(assignee)
+            if assignee:
+                updates.extend(["claimed_at = ?", "last_heartbeat_at = ?", "claim_expires_at = ?"])
+                params.extend([now, now, _claim_expiry(now)])
+            else:
+                updates.extend(["claimed_at = NULL", "last_heartbeat_at = NULL", "claim_expires_at = NULL"])
+
+        if description is not None and description != current.description:
+            self._record_event(
+                issue_id,
+                "description_changed",
+                actor=actor,
+                old_value=current.description,
+                new_value=description,
+            )
+            updates.append("description = ?")
+            params.append(description)
+
+        if notes is not None and notes != current.notes:
+            self._record_event(
+                issue_id,
+                "notes_changed",
+                actor=actor,
+                old_value=current.notes,
+                new_value=notes,
+            )
+            updates.append("notes = ?")
+            params.append(notes)
+
+        if parent_id is not None:
+            if parent_id == "":
+                # Clear parent
+                if current.parent_id is not None:
+                    self._record_event(
                         issue_id,
-                        observed=new_assignee,
-                        expected=_observed_assignee,
-                        message=msg,
+                        "parent_changed",
+                        actor=actor,
+                        old_value=current.parent_id or "",
+                        new_value="",
                     )
-                self.conn.commit()
-        except Exception:
-            self.conn.rollback()
-            raise
+                    updates.append("parent_id = NULL")
+            else:
+                if parent_id != current.parent_id:
+                    self._record_event(
+                        issue_id,
+                        "parent_changed",
+                        actor=actor,
+                        old_value=current.parent_id or "",
+                        new_value=parent_id,
+                    )
+                    updates.append("parent_id = ?")
+                    params.append(parent_id)
+
+        if fields is not None:
+            # Merge into existing fields
+            merged = {**current.fields, **fields}
+            if merged != current.fields:
+                if not _close_reason_only:
+                    # Skip the event for the close-with-reason-only path —
+                    # the reason is already audit-trailed on the status_changed
+                    # event's ``comment``. The fields column update still runs
+                    # so ``issue.fields.close_reason`` remains readable.
+                    self._record_event(
+                        issue_id,
+                        "fields_changed",
+                        actor=actor,
+                        old_value=json.dumps(current.fields),
+                        new_value=json.dumps(merged),
+                    )
+                updates.append("fields = ?")
+                params.append(json.dumps(merged))
+
+        if updates:
+            updates.append("updated_at = ?")
+            params.append(now)
+            params.append(issue_id)
+            # §0.1 CAS guard: when an assignee was observed at SELECT time,
+            # add ``AND assignee = ?`` so a concurrent reassignment fails
+            # the UPDATE atomically. On rowcount==0 we re-read to
+            # distinguish "row vanished" from "reassigned" and raise
+            # ClaimConflictError (typed CONFLICT, not silent VALIDATION).
+            where = "WHERE id = ?"
+            if _observed_assignee:
+                where += " AND assignee = ?"
+                params.append(_observed_assignee)
+            sql = f"UPDATE issues SET {', '.join(updates)} {where}"
+            cursor = self.conn.execute(sql, params)
+            if _observed_assignee and cursor.rowcount == 0:
+                row = self.conn.execute("SELECT assignee FROM issues WHERE id = ?", (issue_id,)).fetchone()
+                if row is None:
+                    msg = f"Issue not found: {issue_id}"
+                    raise KeyError(msg)
+                new_assignee = row["assignee"] or ""
+                msg = f"Cannot update {issue_id}: reassigned to '{new_assignee}' (expected '{_observed_assignee}')"
+                raise ClaimConflictError(
+                    issue_id,
+                    observed=new_assignee,
+                    expected=_observed_assignee,
+                    message=msg,
+                )
 
         updated = self.get_issue(issue_id)
         if _transition_warnings:
@@ -1076,7 +1078,9 @@ class IssuesMixin(DBMixinProtocol):
                 return cast(str, old_status)
         return self.templates.get_initial_state(issue.type)
 
-    def claim_issue(self, issue_id: str, *, assignee: str, actor: str = "", _commit: bool = True) -> Issue:
+    @_retry_busy()
+    @_in_immediate_tx("claim_issue")
+    def claim_issue(self, issue_id: str, *, assignee: str, actor: str = "") -> Issue:
         """Atomically claim an open/wip-category issue with optimistic locking.
 
         Sets assignee only — does NOT change status. Agent uses update_issue
@@ -1086,6 +1090,10 @@ class IssuesMixin(DBMixinProtocol):
 
         Uses a single atomic UPDATE with WHERE guard to prevent race conditions
         where two agents try to claim the same issue concurrently.
+
+        Composed callers (``start_work``, ``_claim_next_with_prior``) pass the
+        decorator's ``_skip_begin=True`` so this method runs inside the outer
+        IMMEDIATE transaction.
         """
         # filigree-694f7e9bf8: enforce the same trimmed-identity invariant as
         # create_issue/update_issue. Without normalization, claiming with
@@ -1119,35 +1127,27 @@ class IssuesMixin(DBMixinProtocol):
         status_ph = ",".join("?" * len(claimable_states))
         now = _now_iso()
         claim_expires_at = _claim_expiry(now)
-        try:
-            cursor = self.conn.execute(
-                f"UPDATE issues SET assignee = ?, claimed_at = COALESCE(claimed_at, ?), "
-                f"last_heartbeat_at = ?, claim_expires_at = ?, updated_at = ? "
-                f"WHERE id = ? AND status IN ({status_ph}) "
-                f"AND (assignee = '' OR assignee IS NULL OR assignee = ?)",
-                [assignee, now, now, claim_expires_at, now, issue_id, *claimable_states, assignee],
-            )
+        cursor = self.conn.execute(
+            f"UPDATE issues SET assignee = ?, claimed_at = COALESCE(claimed_at, ?), "
+            f"last_heartbeat_at = ?, claim_expires_at = ?, updated_at = ? "
+            f"WHERE id = ? AND status IN ({status_ph}) "
+            f"AND (assignee = '' OR assignee IS NULL OR assignee = ?)",
+            [assignee, now, now, claim_expires_at, now, issue_id, *claimable_states, assignee],
+        )
 
-            if cursor.rowcount == 0:
-                # Figure out why it failed: wrong status or already claimed?
-                current = self.conn.execute("SELECT status, assignee FROM issues WHERE id = ?", (issue_id,)).fetchone()
-                if current is None:
-                    msg = f"Issue not found: {issue_id}"
-                    raise KeyError(msg)
-                if current["assignee"] and current["assignee"] != assignee:
-                    msg = f"Cannot claim {issue_id}: already assigned to '{current['assignee']}'"
-                    raise ValueError(msg)
-                msg = (
-                    f"Cannot claim {issue_id}: status is '{current['status']}', expected open-category state or wip-category handoff state"
-                )
+        if cursor.rowcount == 0:
+            # Figure out why it failed: wrong status or already claimed?
+            current = self.conn.execute("SELECT status, assignee FROM issues WHERE id = ?", (issue_id,)).fetchone()
+            if current is None:
+                msg = f"Issue not found: {issue_id}"
+                raise KeyError(msg)
+            if current["assignee"] and current["assignee"] != assignee:
+                msg = f"Cannot claim {issue_id}: already assigned to '{current['assignee']}'"
                 raise ValueError(msg)
+            msg = f"Cannot claim {issue_id}: status is '{current['status']}', expected open-category state or wip-category handoff state"
+            raise ValueError(msg)
 
-            self._record_event(issue_id, "claimed", actor=actor, old_value=old_assignee, new_value=assignee)
-            if _commit:
-                self.conn.commit()
-        except Exception:
-            self.conn.rollback()
-            raise
+        self._record_event(issue_id, "claimed", actor=actor, old_value=old_assignee, new_value=assignee)
         return self.get_issue(issue_id)
 
     def release_claim(
@@ -1340,6 +1340,8 @@ class IssuesMixin(DBMixinProtocol):
                 failures.append(BatchFailure(id=issue.id, error=msg, code=code))
         return released, failures
 
+    @_retry_busy()
+    @_in_immediate_tx("heartbeat_work")
     def heartbeat_work(
         self,
         issue_id: str,
@@ -1374,30 +1376,25 @@ class IssuesMixin(DBMixinProtocol):
 
         now = _now_iso()
         claim_expires_at = _claim_expiry(now, lease_hours)
-        try:
-            cursor = self.conn.execute(
-                "UPDATE issues SET last_heartbeat_at = ?, claim_expires_at = ?, updated_at = ? WHERE id = ? AND assignee = ?",
-                (now, claim_expires_at, now, issue_id, observed),
-            )
-            if cursor.rowcount == 0:
-                current = self.conn.execute("SELECT assignee FROM issues WHERE id = ?", (issue_id,)).fetchone()
-                if current is None:
-                    msg = f"Issue not found: {issue_id}"
-                    raise KeyError(msg)
-                new_assignee = current["assignee"] or ""
-                msg = f"Cannot heartbeat {issue_id}: reassigned to '{new_assignee}' (expected '{observed}')"
-                raise ClaimConflictError(issue_id, observed=new_assignee, expected=observed, message=msg)
-            self._record_event(
-                issue_id,
-                "heartbeat",
-                actor=actor,
-                old_value=observed,
-                new_value=claim_expires_at,
-            )
-            self.conn.commit()
-        except Exception:
-            self.conn.rollback()
-            raise
+        cursor = self.conn.execute(
+            "UPDATE issues SET last_heartbeat_at = ?, claim_expires_at = ?, updated_at = ? WHERE id = ? AND assignee = ?",
+            (now, claim_expires_at, now, issue_id, observed),
+        )
+        if cursor.rowcount == 0:
+            current = self.conn.execute("SELECT assignee FROM issues WHERE id = ?", (issue_id,)).fetchone()
+            if current is None:
+                msg = f"Issue not found: {issue_id}"
+                raise KeyError(msg)
+            new_assignee = current["assignee"] or ""
+            msg = f"Cannot heartbeat {issue_id}: reassigned to '{new_assignee}' (expected '{observed}')"
+            raise ClaimConflictError(issue_id, observed=new_assignee, expected=observed, message=msg)
+        self._record_event(
+            issue_id,
+            "heartbeat",
+            actor=actor,
+            old_value=observed,
+            new_value=claim_expires_at,
+        )
         return self.get_issue(issue_id)
 
     def get_stale_claims(
@@ -1442,6 +1439,8 @@ class IssuesMixin(DBMixinProtocol):
 
         return self._build_issues_batch(stale_ids)
 
+    @_retry_busy()
+    @_in_immediate_tx("reclaim_issue")
     def reclaim_issue(
         self,
         issue_id: str,
@@ -1481,32 +1480,27 @@ class IssuesMixin(DBMixinProtocol):
 
         now = _now_iso()
         claim_expires_at = _claim_expiry(now, lease_hours)
-        try:
-            cursor = self.conn.execute(
-                "UPDATE issues SET assignee = ?, claimed_at = ?, last_heartbeat_at = ?, "
-                "claim_expires_at = ?, updated_at = ? WHERE id = ? AND assignee = ?",
-                (assignee, now, now, claim_expires_at, now, issue_id, expected_assignee),
-            )
-            if cursor.rowcount == 0:
-                current = self.conn.execute("SELECT assignee FROM issues WHERE id = ?", (issue_id,)).fetchone()
-                if current is None:
-                    msg = f"Issue not found: {issue_id}"
-                    raise KeyError(msg)
-                new_assignee = current["assignee"] or ""
-                msg = f"Cannot reclaim {issue_id}: reassigned to '{new_assignee}' (expected '{expected_assignee}')"
-                raise ClaimConflictError(issue_id, observed=new_assignee, expected=expected_assignee, message=msg)
-            self._record_event(
-                issue_id,
-                "reclaimed",
-                actor=actor,
-                old_value=expected_assignee,
-                new_value=assignee,
-                comment=reason,
-            )
-            self.conn.commit()
-        except Exception:
-            self.conn.rollback()
-            raise
+        cursor = self.conn.execute(
+            "UPDATE issues SET assignee = ?, claimed_at = ?, last_heartbeat_at = ?, "
+            "claim_expires_at = ?, updated_at = ? WHERE id = ? AND assignee = ?",
+            (assignee, now, now, claim_expires_at, now, issue_id, expected_assignee),
+        )
+        if cursor.rowcount == 0:
+            current = self.conn.execute("SELECT assignee FROM issues WHERE id = ?", (issue_id,)).fetchone()
+            if current is None:
+                msg = f"Issue not found: {issue_id}"
+                raise KeyError(msg)
+            new_assignee = current["assignee"] or ""
+            msg = f"Cannot reclaim {issue_id}: reassigned to '{new_assignee}' (expected '{expected_assignee}')"
+            raise ClaimConflictError(issue_id, observed=new_assignee, expected=expected_assignee, message=msg)
+        self._record_event(
+            issue_id,
+            "reclaimed",
+            actor=actor,
+            old_value=expected_assignee,
+            new_value=assignee,
+            comment=reason,
+        )
         return self.get_issue(issue_id)
 
     def claim_next(
@@ -1541,7 +1535,7 @@ class IssuesMixin(DBMixinProtocol):
         priority_min: int | None = None,
         priority_max: int | None = None,
         actor: str = "",
-        _commit: bool = True,
+        _skip_begin: bool = False,
     ) -> tuple[Issue, str] | None:
         """Internal: claim_next that also returns the candidate's prior assignee.
 
@@ -1552,6 +1546,11 @@ class IssuesMixin(DBMixinProtocol):
         ``claim_issue`` so a concurrent reassignment landing between the read
         and the UPDATE will surface as the same race ``claim_issue`` already
         handles (skip and continue).
+
+        ``_skip_begin`` is forwarded to the inner ``claim_issue`` decorator
+        stack: composed callers (``start_next_work``) own the outer IMMEDIATE
+        transaction and pass ``True`` so the inner claim does not commit
+        independently.
         """
         if not assignee or not assignee.strip():
             msg = "Assignee cannot be empty"
@@ -1569,7 +1568,7 @@ class IssuesMixin(DBMixinProtocol):
             try:
                 row = self.conn.execute("SELECT assignee FROM issues WHERE id = ?", (issue.id,)).fetchone()
                 prior_assignee = (row["assignee"] if row is not None else "") or ""
-                claimed = self.claim_issue(issue.id, assignee=assignee, actor=actor or assignee, _commit=_commit)
+                claimed = self.claim_issue(issue.id, assignee=assignee, actor=actor or assignee, _skip_begin=_skip_begin)
             except (ValueError, KeyError) as exc:
                 skipped += 1
                 logger.debug("claim_next: skipping %s: %s", issue.id, exc)
@@ -1579,6 +1578,8 @@ class IssuesMixin(DBMixinProtocol):
             logger.warning("claim_next: all %d candidate(s) failed to claim for '%s'", skipped, assignee)
         return None
 
+    @_retry_busy()
+    @_in_immediate_tx("start_work")
     def start_work(
         self,
         issue_id: str,
@@ -1589,11 +1590,13 @@ class IssuesMixin(DBMixinProtocol):
     ) -> Issue:
         """Atomically claim an issue and transition it to a working status.
 
-        Phase D6 composed operation. Performs ``claim_issue`` without
-        committing, followed by ``update_issue(status=target_status)``. If the
-        transition fails, rolling back that open transaction removes both the
-        attempted claim and its audit event, so failed starts do not look like
-        real claim/release handoffs.
+        Phase D6 composed operation. The ``@_in_immediate_tx`` decorator owns
+        the surrounding ``BEGIN IMMEDIATE`` + commit/rollback lifecycle. The
+        inner ``claim_issue`` and ``update_issue`` calls pass
+        ``_skip_begin=True`` so they run inside this outer transaction. If
+        the transition fails, the decorator rolls back the whole composite —
+        both the attempted claim and its audit event vanish, so failed
+        starts do not look like real claim/release handoffs.
 
         ``target_status`` defaults to the unique wip-category status reachable
         from the issue's current status. If the current status can transition
@@ -1609,34 +1612,20 @@ class IssuesMixin(DBMixinProtocol):
         """
         actor = actor or assignee
 
-        issue = self.claim_issue(issue_id, assignee=assignee, actor=actor, _commit=False)
-
-        def _rollback_claim() -> None:
-            self._rollback_uncommitted_start_claim(issue_id)
+        issue = self.claim_issue(issue_id, assignee=assignee, actor=actor, _skip_begin=True)
 
         if target_status is None:
             tpl = self.templates.get_type(issue.type)
             if tpl is None:
-                # Roll back the claim before surfacing the error.
                 from filigree.types.api import InvalidTransitionError
 
-                _rollback_claim()
                 raise InvalidTransitionError(issue.type, issue.status)
-            try:
-                target_status = tpl.reachable_working_status(issue.status)
-            except Exception:
-                _rollback_claim()
-                raise
+            target_status = tpl.reachable_working_status(issue.status)
 
-        try:
-            updated = self.update_issue(issue_id, status=target_status, actor=actor)
-            if self.conn.in_transaction:
-                self.conn.commit()
-            return updated
-        except Exception:
-            _rollback_claim()
-            raise
+        return self.update_issue(issue_id, status=target_status, actor=actor, _skip_begin=True)
 
+    @_retry_busy()
+    @_in_immediate_tx("start_next_work")
     def start_next_work(
         self,
         *,
@@ -1650,15 +1639,13 @@ class IssuesMixin(DBMixinProtocol):
         """Claim the highest-priority ready issue (filtered) and atomically
         transition it to a working status.
 
-        Phase D6 composed operation: ``claim_next`` + atomic transition with
-        compensating rollback (see ``start_work`` for the rollback contract).
-        Returns ``None`` if no ready issue matches the filters.
+        Phase D6 composed operation: ``claim_next`` + atomic transition. The
+        ``@_in_immediate_tx`` decorator owns the outer transaction; inner
+        calls pass ``_skip_begin=True``. On exception the decorator rolls
+        back the whole composite — both the attempted claim and its
+        ``claimed`` event vanish.
 
-        Rollback only releases the claim when *this* invocation acquired it.
-        ``claim_next`` reuses an existing same-assignee claim (claim_issue is
-        idempotent for the same identity), so an unconditional release on
-        transition failure would wipe out a pre-existing, unrelated claim.
-        Mirrors ``start_work``'s ownership-tracking contract.
+        Returns ``None`` if no ready issue matches the filters.
 
         Tie-break ordering inherits from ``claim_next``: priority asc,
         created_at asc, issue_id asc.
@@ -1670,51 +1657,21 @@ class IssuesMixin(DBMixinProtocol):
             priority_min=priority_min,
             priority_max=priority_max,
             actor=actor,
-            _commit=False,
+            _skip_begin=True,
         )
         if claimed_with_prior is None:
             return None
         claimed, _prior_assignee = claimed_with_prior
-
-        def _rollback_claim() -> None:
-            self._rollback_uncommitted_start_claim(claimed.id)
 
         if target_status is None:
             tpl = self.templates.get_type(claimed.type)
             if tpl is None:
                 from filigree.types.api import InvalidTransitionError
 
-                _rollback_claim()
                 raise InvalidTransitionError(claimed.type, claimed.status)
-            try:
-                target_status = tpl.reachable_working_status(claimed.status)
-            except Exception:
-                _rollback_claim()
-                raise
+            target_status = tpl.reachable_working_status(claimed.status)
 
-        try:
-            updated = self.update_issue(claimed.id, status=target_status, actor=actor)
-            if self.conn.in_transaction:
-                self.conn.commit()
-            return updated
-        except Exception:
-            _rollback_claim()
-            raise
-
-    def _rollback_uncommitted_start_claim(self, issue_id: str) -> None:
-        """Rollback an uncommitted claim acquired by start_work/start_next_work.
-
-        The composed operation keeps claim and transition in one transaction.
-        If transition selection or validation fails before update_issue commits,
-        this removes the attempted claim and its event without recording a
-        synthetic release.
-        """
-        if not self.conn.in_transaction:
-            return
-        try:
-            self.conn.rollback()
-        except sqlite3.Error:
-            logger.warning("start_work rollback failed for uncommitted claim on %s", issue_id, exc_info=True)
+        return self.update_issue(claimed.id, status=target_status, actor=actor, _skip_begin=True)
 
     def _batch_with_transition_errors(
         self,

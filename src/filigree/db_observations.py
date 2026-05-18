@@ -921,11 +921,15 @@ class ObservationsMixin(DBMixinProtocol):
             # 3. Create issue first — if this fails, observation is untouched.
             #    The source_observation_id field is the durable idempotency key:
             #    retries after a cleanup failure see the existing issue and return
-            #    it instead of creating a duplicate.  ``create_issue`` commits
-            #    internally, which closes the BEGIN IMMEDIATE transaction; that's
-            #    fine — the writer lock has been held continuously from BEGIN
-            #    through the INSERT, so any peer waiting on BEGIN IMMEDIATE will
-            #    see this issue's row when their idempotency check runs.
+            #    it instead of creating a duplicate.
+            #
+            #    Under 2.1.0 §2.1, ``create_issue`` is wrapped in
+            #    ``@_in_immediate_tx``; pass ``_skip_begin=True`` so it runs
+            #    inside the outer IMMEDIATE we just opened. Then commit
+            #    explicitly to release the writer lock before the observation
+            #    cleanup runs in its own transaction — preserves the prior
+            #    invariant that a DELETE failure must not roll back the
+            #    committed issue.
             issue = self.create_issue(
                 issue_title,
                 type=issue_type,
@@ -933,7 +937,9 @@ class ObservationsMixin(DBMixinProtocol):
                 description=description,
                 actor=actor or obs["actor"],
                 fields={"source_observation_id": obs_id},
+                _skip_begin=True,
             )
+            self.conn.commit()
         except Exception:
             if self.conn.in_transaction:
                 self.conn.rollback()
