@@ -9,6 +9,92 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [2.1.0] - 2026-05-19
 
+Upgrade guide: [Upgrading from 2.0.x to 2.1.0](docs/UPGRADING.md#upgrading-from-20x-to-210).
+
+### Breaking Changes / Migration Notes
+
+- **Custom workflow packs must declare reverse escape paths.**
+  Workflow operations that reopen, release/revert, or force-close issues now
+  validate against template `reverse_transitions`. Custom packs that relied on
+  the previous internal bypass must add the corresponding reverse edge or
+  callers will receive `InvalidTransitionError`.
+
+- **HTTP batch-close no longer accepts `force=true` by default.**
+  `POST /api/batch/close` and `POST /api/loom/batch/close` reject forced HTTP
+  closes unless the dashboard starts with `--allow-http-force-close`. CLI
+  `filigree close --force` and MCP `batch_close(force=true)` are unchanged.
+
+- **Corrupt `issues.fields` rows are no longer merged over silently.**
+  `update_issue(fields=...)` now refuses to merge into unparsable stored JSON.
+  Operators or embedders that intentionally replace a corrupt value must pass
+  `force_overwrite_corrupt=True`, which records a
+  `corrupt_fields_overwritten` event with the raw old value.
+
+- **Duplicate audit-event writes now raise instead of disappearing.**
+  `_record_event` uses `event_seq` to preserve same-second event bursts and
+  uses a normal `INSERT`; true duplicate rows now raise `sqlite3.IntegrityError`
+  so the caller's transaction can roll back instead of losing audit history.
+
+- **The internal `_commit=` keyword was removed.**
+  `claim_issue` and `_claim_next_with_prior` no longer accept `_commit=`.
+  Embedders composing lower-level DB operations inside an existing transaction
+  should use the public `start_work` / `start_next_work` APIs where possible,
+  or the internal `_skip_begin=True` path only when they own the transaction
+  boundary.
+
+### Added
+
+- **`transition_forced` audit event (2.1.0 §1.1).** Every
+  `_skip_transition_check=True` status change in `update_issue` now
+  emits a `transition_forced` event alongside `status_changed`.
+  Reviewers reading the audit trail can identify every workflow
+  shortcut directly instead of inferring it from the absence of a
+  `transition_warning`. Internal callers (`reopen_issue`, force
+  `close_issue`, `release_claim` revert, `start_work` rollback) all
+  emit it automatically.
+
+- **`--allow-http-force-close` opt-in startup flag (2.1.0 §1.1).**
+  `filigree dashboard --allow-http-force-close` enables `force=true`
+  on the HTTP batch-close routes. Default-off; CLI / MCP unchanged.
+
+- **Typed `ClaimConflictError` for optimistic-lock CAS failures (2.1.0
+  §0.3).** `filigree.types.api.ClaimConflictError(ValueError)` carries
+  the failing issue id and the observed/expected assignee pair. Every
+  CAS-failure path in `db_issues.py` (`_check_expected_assignee`,
+  `release_claim`, `heartbeat_work`, `reclaim_issue`) raises the typed
+  class; every dispatch site (5 in `db_issues.py`, plus the dashboard
+  routes, MCP tools, and CLI surfaces) now routes via `isinstance`
+  rather than message-text matching. The class still subclasses
+  `ValueError`, so pre-existing `except ValueError` callers continue
+  to work — only the routing mechanism changed. Closes the project's
+  own CLAUDE.md contract violation ("switch on `code`, not message
+  text") and removes a class of silent CONFLICT→VALIDATION downgrades
+  triggered by future message rewording.
+
+- **Cross-product entity-association binding (ADR-029, Clarion B.7 /
+  WP9-A).** New `entity_associations` table (schema v15) binds Filigree
+  issues to Clarion entity IDs as opaque strings. Four MCP tools —
+  `add_entity_association`, `remove_entity_association`,
+  `list_entity_associations`, and `list_associations_by_entity` —
+  front the binding for agent writes and both lookup directions;
+  matching HTTP routes serve cross-product reads (notably for
+  Clarion's forthcoming `issues_for` tool, B.6). The reverse-lookup
+  surface (`GET /api/entity-associations?entity_id=…`,
+  `list_associations_by_entity`) answers "what issues are about this
+  code I'm reading?" in one round trip and uses the
+  `ix_entity_assoc_entity` index. The binding is idempotent
+  on the composite key: re-attaching refreshes `content_hash_at_attach`
+  and `attached_at` while preserving the original `attached_by`, so
+  drift refreshes don't overwrite the audit signal of who first
+  bound the issue. Actor identity on HTTP writes runs through
+  `_validate_actor` for parity with other write routes. Filigree
+  never parses the Clarion entity-ID grammar (ADR-003), preserving
+  the federation enrich-only rule (loom.md §5); the audit is encoded
+  as three named tests in `tests/test_entity_associations_federation.py`,
+  with the initialisation-coupling test exercising the reverse
+  lookup under blocked sockets so the §5 invariant covers Clarion's
+  primary call path.
+
 ### Changed
 
 - **Workflow templates now declare `reverse_transitions` for controlled
@@ -231,59 +317,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   silent-failure H7 in the 2.1.0 panel review — the same class of
   cross-project confusion that PR #41's `core.py` anchor-discovery
   hardening addressed on the read side.
-
-### Added
-
-- **`transition_forced` audit event (2.1.0 §1.1).** Every
-  `_skip_transition_check=True` status change in `update_issue` now
-  emits a `transition_forced` event alongside `status_changed`.
-  Reviewers reading the audit trail can identify every workflow
-  shortcut directly instead of inferring it from the absence of a
-  `transition_warning`. Internal callers (`reopen_issue`, force
-  `close_issue`, `release_claim` revert, `start_work` rollback) all
-  emit it automatically.
-
-- **`--allow-http-force-close` opt-in startup flag (2.1.0 §1.1).**
-  `filigree dashboard --allow-http-force-close` enables `force=true`
-  on the HTTP batch-close routes. Default-off; CLI / MCP unchanged.
-
-- **Typed `ClaimConflictError` for optimistic-lock CAS failures (2.1.0
-  §0.3).** `filigree.types.api.ClaimConflictError(ValueError)` carries
-  the failing issue id and the observed/expected assignee pair. Every
-  CAS-failure path in `db_issues.py` (`_check_expected_assignee`,
-  `release_claim`, `heartbeat_work`, `reclaim_issue`) raises the typed
-  class; every dispatch site (5 in `db_issues.py`, plus the dashboard
-  routes, MCP tools, and CLI surfaces) now routes via `isinstance`
-  rather than message-text matching. The class still subclasses
-  `ValueError`, so pre-existing `except ValueError` callers continue
-  to work — only the routing mechanism changed. Closes the project's
-  own CLAUDE.md contract violation ("switch on `code`, not message
-  text") and removes a class of silent CONFLICT→VALIDATION downgrades
-  triggered by future message rewording.
-
-- **Cross-product entity-association binding (ADR-029, Clarion B.7 /
-  WP9-A).** New `entity_associations` table (schema v15) binds Filigree
-  issues to Clarion entity IDs as opaque strings. Four MCP tools —
-  `add_entity_association`, `remove_entity_association`,
-  `list_entity_associations`, and `list_associations_by_entity` —
-  front the binding for agent writes and both lookup directions;
-  matching HTTP routes serve cross-product reads (notably for
-  Clarion's forthcoming `issues_for` tool, B.6). The reverse-lookup
-  surface (`GET /api/entity-associations?entity_id=…`,
-  `list_associations_by_entity`) answers "what issues are about this
-  code I'm reading?" in one round trip and uses the
-  `ix_entity_assoc_entity` index. The binding is idempotent
-  on the composite key: re-attaching refreshes `content_hash_at_attach`
-  and `attached_at` while preserving the original `attached_by`, so
-  drift refreshes don't overwrite the audit signal of who first
-  bound the issue. Actor identity on HTTP writes runs through
-  `_validate_actor` for parity with other write routes. Filigree
-  never parses the Clarion entity-ID grammar (ADR-003), preserving
-  the federation enrich-only rule (loom.md §5); the audit is encoded
-  as three named tests in `tests/test_entity_associations_federation.py`,
-  with the initialisation-coupling test exercising the reverse
-  lookup under blocked sockets so the §5 invariant covers Clarion's
-  primary call path.
 
 ## [2.0.3] - 2026-05-17
 
