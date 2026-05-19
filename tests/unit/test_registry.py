@@ -59,6 +59,22 @@ def test_registry_backend_literal_is_shared_config_model_source_of_truth() -> No
     assert file_record_dict_hints["registry_backend"] is RegistryBackend
 
 
+def test_filigree_db_validates_programmatic_clarion_config(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="unknown clarion setting"):
+        FiligreeDB(
+            tmp_path / "unknown.db",
+            prefix="test",
+            clarion_config={"base-url": "http://clarion.test"},  # type: ignore[typeddict-unknown-key]
+        )
+
+    with pytest.raises(ValueError, match="allow_local_fallback"):
+        FiligreeDB(
+            tmp_path / "bad-fallback.db",
+            prefix="test",
+            clarion_config={"allow_local_fallback": "yes"},  # type: ignore[typeddict-item]
+        )
+
+
 def test_registry_resolved_file_uses_branded_file_identity_types() -> None:
     hints = get_type_hints(ResolvedFile)
 

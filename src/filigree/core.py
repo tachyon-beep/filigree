@@ -584,7 +584,7 @@ class _ClarionLocalFallbackRegistry:
         return self._primary.is_displaced()
 
 
-def _validate_registry_settings(raw: dict[str, Any], *, source: Path) -> None:
+def _validate_registry_settings(raw: dict[str, Any], *, source: Path, require_clarion_base_url: bool = True) -> None:
     """Validate ADR-014 registry backend settings in project config."""
     if "registry_backend" in raw:
         backend = raw["registry_backend"]
@@ -606,7 +606,7 @@ def _validate_registry_settings(raw: dict[str, Any], *, source: Path) -> None:
     if unknown_clarion_keys:
         msg = f"{source}: unknown clarion setting(s): {', '.join(unknown_clarion_keys)}"
         raise ValueError(msg)
-    if raw.get("registry_backend") == "clarion" and "base_url" not in clarion:
+    if require_clarion_base_url and raw.get("registry_backend") == "clarion" and "base_url" not in clarion:
         msg = f"{source}: 'clarion.base_url' is required when registry_backend is 'clarion'"
         raise ValueError(msg)
     if "base_url" in clarion:
@@ -778,6 +778,14 @@ class FiligreeDB(
         if registry_backend not in VALID_REGISTRY_BACKENDS:
             msg = f"registry_backend must be one of {sorted(VALID_REGISTRY_BACKENDS)}, got {registry_backend!r}"
             raise ValueError(msg)
+        _validate_registry_settings(
+            {
+                "registry_backend": registry_backend,
+                "clarion": dict(clarion_config or {}),
+            },
+            source=self.db_path,
+            require_clarion_base_url=registry is None,
+        )
         self.registry_backend = registry_backend
         self.clarion_config = cast("ClarionConfig", dict(clarion_config or {}))
         self.allow_local_fallback = bool(self.clarion_config.get("allow_local_fallback", False))
