@@ -497,6 +497,8 @@ class TestObservationStatsDictShape:
         assert isinstance(result["stale_count"], int)
         assert isinstance(result["oldest_hours"], (float, type(None)))
         assert isinstance(result["expiring_soon_count"], int)
+        assert isinstance(result["sweep_consecutive_failures"], int)
+        assert isinstance(result["last_successful_sweep_at"], (str, type(None)))
 
 
 class TestBatchDismissResultShape:

@@ -500,6 +500,47 @@ class TestSweepExceptionSuppression:
         # Stats count must match the visible rows (not include the expired row)
         assert stats["count"] == 1
 
+    def test_repeated_sweep_failures_are_visible_in_stats(self, db: FiligreeDB) -> None:
+        db.create_observation("survives repeated sweep failure")
+        real_conn = db._conn
+
+        def _fail_on_sweep_delete(real: Any, sql: str, params: Any = ()) -> Any:
+            if "DELETE FROM observations WHERE expires_at" in sql:
+                raise sqlite3.OperationalError("disk I/O error")
+            return real.execute(sql, params)
+
+        db._conn = _InterceptingConn(real_conn, _fail_on_sweep_delete)  # type: ignore[assignment]
+        try:
+            db.list_observations()
+            db.list_observations()
+        finally:
+            db._conn = real_conn
+
+        stats = db.observation_stats(sweep=False)
+        assert stats["sweep_consecutive_failures"] == 2
+        assert stats["last_successful_sweep_at"] is None
+
+    def test_successful_sweep_resets_failure_count(self, db: FiligreeDB) -> None:
+        db.create_observation("survives transient sweep failure")
+        real_conn = db._conn
+
+        def _fail_on_sweep_delete(real: Any, sql: str, params: Any = ()) -> Any:
+            if "DELETE FROM observations WHERE expires_at" in sql:
+                raise sqlite3.OperationalError("disk I/O error")
+            return real.execute(sql, params)
+
+        db._conn = _InterceptingConn(real_conn, _fail_on_sweep_delete)  # type: ignore[assignment]
+        try:
+            db.list_observations()
+        finally:
+            db._conn = real_conn
+
+        db.list_observations()
+
+        stats = db.observation_stats(sweep=False)
+        assert stats["sweep_consecutive_failures"] == 0
+        assert stats["last_successful_sweep_at"] is not None
+
     def test_sweep_propagates_integrity_error(self, db: FiligreeDB) -> None:
         """IntegrityError during sweep indicates a real invariant violation, not a transient lock."""
         import sqlite3

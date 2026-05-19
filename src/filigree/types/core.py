@@ -274,3 +274,5 @@ class ObservationStatsDict(TypedDict):
     stale_count: int
     oldest_hours: float | None
     expiring_soon_count: int
+    sweep_consecutive_failures: int
+    last_successful_sweep_at: ISOTimestamp | None

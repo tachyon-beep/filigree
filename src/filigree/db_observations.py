@@ -54,6 +54,7 @@ def _alive_clause(sweep: bool, now_iso: str) -> tuple[str, str, tuple[str, ...]]
 
 
 DISMISSED_AUDIT_TRAIL_CAP = 10_000
+OBSERVATION_SWEEP_FAILURE_ALERT_THRESHOLD = 3
 
 
 def _expires_iso(ttl_days: int = DEFAULT_TTL_DAYS) -> str:
@@ -119,6 +120,21 @@ class ObservationsMixin(DBMixinProtocol):
     time via MRO.
     """
 
+    def _record_observation_sweep_success(self, timestamp: str) -> None:
+        self._observation_sweep_consecutive_failures = 0
+        self._observation_sweep_last_success_at = timestamp
+
+    def _record_observation_sweep_failure(self) -> int:
+        failures = int(getattr(self, "_observation_sweep_consecutive_failures", 0)) + 1
+        self._observation_sweep_consecutive_failures = failures
+        return failures
+
+    def _observation_sweep_health(self) -> dict[str, Any]:
+        return {
+            "sweep_consecutive_failures": int(getattr(self, "_observation_sweep_consecutive_failures", 0)),
+            "last_successful_sweep_at": getattr(self, "_observation_sweep_last_success_at", None),
+        }
+
     def _sweep_expired_observations(self) -> tuple[int, bool]:
         """Delete expired observations in a savepoint (piggyback cleanup).
 
@@ -151,6 +167,7 @@ class ObservationsMixin(DBMixinProtocol):
                 (DISMISSED_AUDIT_TRAIL_CAP,),
             )
             self.conn.execute("RELEASE SAVEPOINT sweep_obs")
+            self._record_observation_sweep_success(now)
             if cursor.rowcount > 0:
                 logger.debug("Swept %d expired observations", cursor.rowcount)
             return cursor.rowcount, True
@@ -167,7 +184,10 @@ class ObservationsMixin(DBMixinProtocol):
         except sqlite3.OperationalError:
             # Suppress transient errors (locked, busy) — sweep is best-effort.
             # Let ProgrammingError and InterfaceError propagate; those indicate code bugs.
-            logger.warning("Observation sweep failed, rolled back", exc_info=True)
+            failures = self._record_observation_sweep_failure()
+            logger.warning("Observation sweep failed, rolled back", extra={"consecutive_failures": failures}, exc_info=True)
+            if failures >= OBSERVATION_SWEEP_FAILURE_ALERT_THRESHOLD:
+                logger.error("Observation sweep has failed %d consecutive times", failures)
             try:
                 self.conn.execute("ROLLBACK TO SAVEPOINT sweep_obs")
             finally:
@@ -521,8 +541,16 @@ class ObservationsMixin(DBMixinProtocol):
         # opted out of sweeping — in both cases expired rows may still exist.
         alive_frag, alive_where, alive_params = _alive_clause(sweep and swept_ok, now_iso)
         count = self.conn.execute(f"SELECT COUNT(*) FROM observations{alive_where}", alive_params).fetchone()[0]
+        sweep_health = self._observation_sweep_health()
         if count == 0:
-            return {"count": 0, "stale_count": 0, "oldest_hours": 0, "expiring_soon_count": 0}
+            return {
+                "count": 0,
+                "stale_count": 0,
+                "oldest_hours": 0,
+                "expiring_soon_count": 0,
+                "sweep_consecutive_failures": cast(int, sweep_health["sweep_consecutive_failures"]),
+                "last_successful_sweep_at": cast(ISOTimestamp | None, sweep_health["last_successful_sweep_at"]),
+            }
 
         stale_cutoff = (now - timedelta(hours=STALE_THRESHOLD_HOURS)).isoformat()
         expiring_cutoff = (now + timedelta(hours=24)).isoformat()
@@ -552,6 +580,8 @@ class ObservationsMixin(DBMixinProtocol):
             "stale_count": stale,
             "oldest_hours": round(oldest_hours, 1) if oldest_hours is not None else None,
             "expiring_soon_count": expiring,
+            "sweep_consecutive_failures": cast(int, sweep_health["sweep_consecutive_failures"]),
+            "last_successful_sweep_at": cast(ISOTimestamp | None, sweep_health["last_successful_sweep_at"]),
         }
 
     def dismiss_observation(
