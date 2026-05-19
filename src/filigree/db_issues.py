@@ -1946,6 +1946,7 @@ class IssuesMixin(DBMixinProtocol):
         ready = self.get_ready()
 
         skipped = 0
+        first_explicit_transition_error: ValueError | None = None
         for issue in ready:
             if type_filter is not None and issue.type != type_filter:
                 continue
@@ -1980,8 +1981,17 @@ class IssuesMixin(DBMixinProtocol):
                 # Race / status mismatch / deleted — try next candidate.
                 skipped += 1
                 logger.debug("start_next_work: skipping %s: %s", issue.id, exc.__cause__)
+                if (
+                    target_status is not None
+                    and first_explicit_transition_error is None
+                    and isinstance(exc.__cause__, ValueError)
+                    and classify_value_error(str(exc.__cause__)) == ErrorCode.INVALID_TRANSITION
+                ):
+                    first_explicit_transition_error = exc.__cause__
                 continue
 
+        if first_explicit_transition_error is not None:
+            raise first_explicit_transition_error
         if skipped:
             logger.warning("start_next_work: all %d candidate(s) failed to claim for '%s'", skipped, assignee)
         return None
@@ -2022,18 +2032,26 @@ class IssuesMixin(DBMixinProtocol):
         writer lock is held only across the SQL writes. On exception the
         decorator rolls back both the claim and its audit event.
 
-        Claim-phase failures (race, status mismatch, deleted issue) are
-        repackaged as ``_StartCandidateUnclaimableError`` so the
-        ``start_next_work`` iterator can distinguish "try another
-        candidate" from a user-supplied error in the transition phase
-        (e.g. a bogus explicit ``target_status``), which propagates
-        unchanged.
+        Claim-phase failures (race, status mismatch, deleted issue) and
+        transition-class failures are repackaged as
+        ``_StartCandidateUnclaimableError`` so the ``start_next_work``
+        iterator can try another candidate. ``start_work`` unwraps the
+        sentinel to preserve its public error contract; ``start_next_work``
+        re-raises an explicit target-status transition error only after no
+        compatible candidate succeeds.
         """
         try:
             self.claim_issue(issue_id, assignee=assignee, actor=actor, _skip_begin=True)
         except (ClaimConflictError, KeyError) as exc:
             raise _StartCandidateUnclaimableError(issue_id) from exc
-        return self.update_issue(issue_id, status=target_status, actor=actor, _skip_begin=True)
+        try:
+            return self.update_issue(issue_id, status=target_status, actor=actor, _skip_begin=True)
+        except InvalidTransitionError as exc:
+            raise _StartCandidateUnclaimableError(issue_id) from exc
+        except ValueError as exc:
+            if classify_value_error(str(exc)) == ErrorCode.INVALID_TRANSITION:
+                raise _StartCandidateUnclaimableError(issue_id) from exc
+            raise
 
     def _batch_with_transition_errors(
         self,

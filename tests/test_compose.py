@@ -267,6 +267,23 @@ class TestStartNextWork:
         assert [e["event_type"] for e in changes if e["event_type"] == "claimed"] == ["claimed"]
         assert [e["event_type"] for e in changes if e["event_type"] == "released"] == []
 
+    def test_explicit_target_status_skips_incompatible_candidates(self, db: FiligreeDB) -> None:
+        """A heterogeneous ready queue should not abort on the first incompatible type."""
+        bug = db.create_issue("d6-next-incompatible-bug", type="bug", priority=0)
+        task = db.create_issue("d6-next-compatible-task", type="task", priority=1)
+
+        result = db.start_next_work(assignee="alice", target_status="in_progress", actor="alice")
+
+        assert result is not None
+        assert result.id == task.id
+        assert result.status == "in_progress"
+        assert result.assignee == "alice"
+        bug_after = db.get_issue(bug.id)
+        assert bug_after.status == "triage"
+        assert bug_after.assignee == ""
+        bug_events = db.get_issue_events(bug.id, limit=20)
+        assert [e["event_type"] for e in bug_events if e["event_type"] in {"claimed", "released"}] == []
+
     def test_claim_phase_validation_bug_propagates(self, db: FiligreeDB, monkeypatch: pytest.MonkeyPatch) -> None:
         """start_next_work must not turn arbitrary claim ValueError into no work."""
         db.create_issue("d6-next-claim-bug", type="task", priority=0)
