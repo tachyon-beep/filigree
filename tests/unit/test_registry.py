@@ -160,6 +160,12 @@ def test_clarion_registry_rejects_invalid_base_url(base_url: str) -> None:
         ClarionRegistry(base_url)
 
 
+@pytest.mark.parametrize("timeout_seconds", [0, -1, False, "slow"])
+def test_clarion_registry_rejects_invalid_timeout_seconds(timeout_seconds: object) -> None:
+    with pytest.raises(ValueError, match="timeout_seconds"):
+        ClarionRegistry("http://clarion.test", timeout_seconds=timeout_seconds)  # type: ignore[arg-type]
+
+
 def test_clarion_registry_is_immutable() -> None:
     registry = ClarionRegistry("http://clarion.test/")
 
