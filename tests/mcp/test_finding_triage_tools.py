@@ -11,7 +11,8 @@ from filigree.core import FiligreeDB
 from filigree.mcp_server import call_tool
 from filigree.registry import RegistryFileNotFoundError, RegistryUnavailableError, ResolvedFile
 from filigree.types.api import ErrorCode
-from filigree.types.core import make_entity_id, make_file_id
+from filigree.types.core import make_entity_id
+from tests._fakes.registry import FixedRegistry
 from tests.mcp._helpers import _parse
 
 
@@ -81,20 +82,7 @@ class TestListFindingsTool:
 
 class TestReportFindingTool:
     async def test_report_finding_uses_registry_resolved_file_id(self, mcp_db: FiligreeDB) -> None:
-        class FixedRegistry:
-            def resolve_file(self, path: str, *, language: str = "", actor: str = "") -> ResolvedFile:
-                return {
-                    "file_id": make_file_id("core:file:report-target@src/report_target.py"),
-                    "content_hash": "",
-                    "canonical_path": path,
-                    "language": language,
-                    "registry_backend": "local",
-                }
-
-            def is_displaced(self) -> bool:
-                return False
-
-        mcp_db.registry = FixedRegistry()
+        mcp_db.registry = FixedRegistry(file_id="core:file:report-target@src/report_target.py")
 
         data = _parse(
             await call_tool(

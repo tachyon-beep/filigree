@@ -448,20 +448,15 @@ class TestProcessScanResults:
         assert records[0].exc_info is not None
 
     def test_ingest_uses_registry_resolved_file_id(self, tmp_path: Path) -> None:
-        class FixedRegistry:
-            def resolve_file(self, path: str, *, language: str = "", actor: str = "") -> ResolvedFile:
-                return {
-                    "file_id": make_entity_id("core:file:abc123@src/main.py"),
-                    "content_hash": "hash-ingest",
-                    "canonical_path": path,
-                    "language": language,
-                    "registry_backend": "clarion",
-                }
-
-            def is_displaced(self) -> bool:
-                return False
-
-        db = FiligreeDB(tmp_path / "filigree.db", prefix="test", registry=FixedRegistry())
+        db = FiligreeDB(
+            tmp_path / "filigree.db",
+            prefix="test",
+            registry=FixedRegistry(
+                file_id="core:file:abc123@src/main.py",
+                content_hash="hash-ingest",
+                registry_backend="clarion",
+            ),
+        )
         try:
             db.initialize()
             result = db.process_scan_results(
