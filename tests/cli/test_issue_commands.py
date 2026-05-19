@@ -233,6 +233,34 @@ class TestUpdateAndClose:
         assert data["status"] == "confirmed"
         assert data["data_warnings"] == ["Missing recommended fields for 'confirmed': severity"]
 
+    def test_update_invalid_transition_json_includes_valid_transitions(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        created = runner.invoke(cli, ["create", "Invalid transition hints", "--type", "bug", "--json"])
+        assert created.exit_code == 0
+        issue_id = json.loads(created.output)["issue_id"]
+
+        result = runner.invoke(cli, ["update", issue_id, "--status", "fixing", "--json"])
+
+        assert result.exit_code == 1
+        data = json.loads(result.output)
+        assert data["code"] == "INVALID_TRANSITION"
+        assert {transition["to"] for transition in data["valid_transitions"]} == {"confirmed", "wont_fix", "not_a_bug"}
+        assert data["hint"] == "Use get_valid_transitions to see allowed state changes"
+
+    def test_update_claim_conflict_json_includes_details(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        created = runner.invoke(cli, ["create", "Claim-aware update", "--json"])
+        assert created.exit_code == 0
+        issue_id = json.loads(created.output)["issue_id"]
+        runner.invoke(cli, ["claim", issue_id, "--assignee", "agent-holder"])
+
+        result = runner.invoke(cli, ["--actor", "other-agent", "update", issue_id, "--priority", "0", "--json"])
+
+        assert result.exit_code == 1
+        data = json.loads(result.output)
+        assert data["code"] == "CONFLICT"
+        assert data["details"] == {"issue_id": issue_id, "observed": "agent-holder", "expected": "other-agent"}
+
     def test_update_not_found(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project
         result = runner.invoke(cli, ["update", "test-nonexistent", "--title", "nope"])
@@ -324,6 +352,20 @@ class TestUpdateAndClose:
         assert blocked in unblocked_ids, "issue whose only dep closed must appear in newly_unblocked"
         assert already_ready not in unblocked_ids, f"pre-existing ready issue must NOT appear in newly_unblocked; got {unblocked_ids}"
 
+    def test_close_claim_conflict_json_includes_details(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        created = runner.invoke(cli, ["create", "Claim-aware close", "--json"])
+        assert created.exit_code == 0
+        issue_id = json.loads(created.output)["issue_id"]
+        runner.invoke(cli, ["claim", issue_id, "--assignee", "agent-holder"])
+
+        result = runner.invoke(cli, ["--actor", "other-agent", "close", issue_id, "--json"])
+
+        assert result.exit_code == 1
+        data = json.loads(result.output)
+        assert data["code"] == "CONFLICT"
+        assert data["details"] == {"issue_id": issue_id, "observed": "agent-holder", "expected": "other-agent"}
+
 
 class TestReopen:
     def test_reopen_issue(self, cli_in_project: tuple[CliRunner, Path]) -> None:
@@ -377,6 +419,25 @@ class TestReopen:
         assert data["succeeded"][0]["issue_id"] == good_id
         assert len(data["failed"]) == 1
 
+    def test_reopen_json_batch_claim_conflict_uses_conflict_code(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        held = runner.invoke(cli, ["create", "Held reopen"])
+        free = runner.invoke(cli, ["create", "Free reopen"])
+        held_id = _extract_id(held.output)
+        free_id = _extract_id(free.output)
+        assert runner.invoke(cli, ["claim", held_id, "--assignee", "agent-holder"]).exit_code == 0
+        assert runner.invoke(cli, ["--actor", "agent-holder", "close", held_id]).exit_code == 0
+        assert runner.invoke(cli, ["close", free_id]).exit_code == 0
+
+        result = runner.invoke(cli, ["--actor", "other-agent", "reopen", held_id, free_id, "--json"])
+
+        assert result.exit_code == 1
+        data = json.loads(result.output)
+        assert data["succeeded"][0]["issue_id"] == free_id
+        assert data["failed"][0]["id"] == held_id
+        assert data["failed"][0]["code"] == "CONFLICT"
+        assert data["failed"][0]["details"] == {"issue_id": held_id, "observed": "agent-holder", "expected": "other-agent"}
+
     def test_reopen_json_all_success(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project
         r1 = runner.invoke(cli, ["create", "A"])
@@ -414,6 +475,19 @@ class TestCommentsCli:
         assert data["comment"]["author"] == "cli-commenter"
         assert data["comment"]["text"] == "My comment"
         assert isinstance(data["comment"]["created_at"], str)
+
+    def test_add_comment_claim_conflict_json_includes_details(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        r = runner.invoke(cli, ["create", "Claim-aware comment"])
+        issue_id = _extract_id(r.output)
+        runner.invoke(cli, ["claim", issue_id, "--assignee", "agent-holder"])
+
+        result = runner.invoke(cli, ["--actor", "other-agent", "add-comment", issue_id, "note", "--json"])
+
+        assert result.exit_code == 1
+        data = json.loads(result.output)
+        assert data["code"] == "CONFLICT"
+        assert data["details"] == {"issue_id": issue_id, "observed": "agent-holder", "expected": "other-agent"}
 
     def test_list_comments(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project
@@ -510,6 +584,32 @@ class TestLabelCli:
         assert data["code"] == "VALIDATION"
         assert "priority field" in data["error"]
 
+    def test_label_add_claim_conflict_json_includes_details(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        r = runner.invoke(cli, ["create", "Claim-aware label"])
+        issue_id = _extract_id(r.output)
+        runner.invoke(cli, ["claim", issue_id, "--assignee", "agent-holder"])
+
+        result = runner.invoke(cli, ["--actor", "other-agent", "add-label", "needs-review", issue_id, "--json"])
+
+        assert result.exit_code == 1
+        data = json.loads(result.output)
+        assert data["code"] == "CONFLICT"
+        assert data["details"] == {"issue_id": issue_id, "observed": "agent-holder", "expected": "other-agent"}
+
+    def test_label_remove_claim_conflict_json_includes_details(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        r = runner.invoke(cli, ["create", "Claim-aware remove label", "-l", "needs-review"])
+        issue_id = _extract_id(r.output)
+        runner.invoke(cli, ["claim", issue_id, "--assignee", "agent-holder"])
+
+        result = runner.invoke(cli, ["--actor", "other-agent", "remove-label", issue_id, "needs-review", "--json"])
+
+        assert result.exit_code == 1
+        data = json.loads(result.output)
+        assert data["code"] == "CONFLICT"
+        assert data["details"] == {"issue_id": issue_id, "observed": "agent-holder", "expected": "other-agent"}
+
     def test_label_add_not_found(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project
         result = runner.invoke(cli, ["add-label", "bug", "test-nonexistent"])
@@ -565,6 +665,19 @@ class TestClaimCli:
         assert data["claimed_at"] is not None
         assert data["last_heartbeat_at"] == data["claimed_at"]
         assert data["claim_expires_at"] is not None
+
+    def test_claim_conflict_json_includes_details(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        runner, _ = cli_in_project
+        r = runner.invoke(cli, ["create", "Claim conflict JSON"])
+        issue_id = _extract_id(r.output)
+        runner.invoke(cli, ["claim", issue_id, "--assignee", "agent-1"])
+
+        result = runner.invoke(cli, ["claim", issue_id, "--assignee", "agent-2", "--json"])
+
+        assert result.exit_code == 1
+        data = json.loads(result.output)
+        assert data["code"] == "CONFLICT"
+        assert data["details"] == {"issue_id": issue_id, "observed": "agent-1", "expected": "agent-2"}
 
     def test_claim_not_found(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project
@@ -874,6 +987,7 @@ class TestReleaseCli:
         data = json.loads(result.output)
         assert data["code"] == "CONFLICT"
         assert "agent-2" in data["error"]
+        assert data["details"] == {"issue_id": issue_id, "observed": "agent-2", "expected": "agent-1"}
 
     def test_release_json_not_found(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         runner, _ = cli_in_project

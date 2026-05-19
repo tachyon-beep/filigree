@@ -29,6 +29,7 @@ from filigree.mcp_tools.payloads import file_assoc_to_mcp
 from filigree.types.api import (
     AmbiguousTransitionError,
     BatchResponse,
+    ClaimConflictError,
     ClaimNextEmptyResponse,
     ClaimNextResponse,
     ErrorCode,
@@ -39,6 +40,8 @@ from filigree.types.api import (
     PublicIssue,
     SlimIssue,
     TransitionDetail,
+    claim_conflict_envelope,
+    classify_release_claim_error,
     classify_value_error,
     parse_response_detail,
 )
@@ -70,7 +73,37 @@ _LIST_ISSUES_SORT_FIELDS = {"created_at", "updated_at", "priority"}
 
 
 def _wrong_project_response(exc: WrongProjectError) -> list[TextContent]:
-    return _text(ErrorResponse(error=str(exc), code=ErrorCode.VALIDATION))
+    # 2.1.0 §1.2: MCP is an untrusted-surface boundary (agents can be
+    # arbitrarily scoped); surface the generic ``safe_message`` so a
+    # foreign prefix is not leaked back to a caller who guessed an ID.
+    return _text(ErrorResponse(error=exc.safe_message, code=ErrorCode.VALIDATION))
+
+
+def _claim_conflict_response(exc: ClaimConflictError) -> list[TextContent]:
+    return _text(claim_conflict_envelope(exc))
+
+
+def _issue_value_error_response(tracker: Any, issue_id: str, exc: ValueError) -> list[TextContent]:
+    if isinstance(exc, ClaimConflictError):
+        return _claim_conflict_response(exc)
+    msg = str(exc)
+    if isinstance(exc, (AmbiguousTransitionError, InvalidTransitionError)):
+        valid_transitions = exc.valid_transitions if isinstance(exc, InvalidTransitionError) else None
+        return _text(_build_transition_error(tracker, issue_id, msg, valid_transitions=valid_transitions))
+    code = classify_value_error(msg)
+    if code == ErrorCode.INVALID_TRANSITION:
+        return _text(_build_transition_error(tracker, issue_id, msg))
+    return _text(ErrorResponse(error=msg, code=code))
+
+
+def _release_claim_value_error_response(tracker: Any, issue_id: str, exc: ValueError) -> list[TextContent]:
+    msg = str(exc)
+    code = classify_release_claim_error(issue_id, exc)
+    if code == ErrorCode.CONFLICT:
+        return _text(ErrorResponse(error=msg, code=code))
+    if code == ErrorCode.INVALID_TRANSITION:
+        return _text(_build_transition_error(tracker, issue_id, msg))
+    return _text(ErrorResponse(error=msg, code=code))
 
 
 def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
@@ -233,6 +266,10 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
                         "description": "New parent issue ID (empty string to clear)",
                     },
                     "fields": {"type": "object", "description": "Fields to merge into existing fields"},
+                    "force_overwrite_corrupt": {
+                        "type": "boolean",
+                        "description": "Overwrite corrupt stored fields instead of refusing to merge.",
+                    },
                     "actor": {"type": "string", "description": "Agent/user identity for audit trail"},
                     "expected_assignee": {
                         "type": "string",
@@ -255,7 +292,7 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
                 "status explicitly to land in an alternate done state (e.g. 'wont_fix', 'not_a_bug', "
                 "'cancelled'). Returns INVALID_TRANSITION with valid_transitions when the path isn't "
                 "defined — walk the workflow with update_issue, pass a reachable status, or pass "
-                "force=true to rage-close from any state (skips the template transition validator)."
+                "force=true to use the declared reverse/escape edge for cleanup."
             ),
             inputSchema={
                 "type": "object",
@@ -283,9 +320,9 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
                         "type": "boolean",
                         "default": False,
                         "description": (
-                            "Bypass the template transition validator and close from any state. "
-                            "Use only for cleanup flows that intentionally skip the workflow; "
-                            "soft transitions are still recorded as transition_warning events."
+                            "Use the template reverse/escape transition and close from any state. "
+                            "Use only for cleanup flows that intentionally leave the normal workflow; "
+                            "transition_forced is recorded before status_changed."
                         ),
                     },
                 },
@@ -662,8 +699,8 @@ def register() -> tuple[list[Tool], dict[str, Callable[..., Any]]]:
                         "type": "boolean",
                         "default": False,
                         "description": (
-                            "Bypass the template transition validator on every item. "
-                            "Use only for cleanup flows that intentionally skip the workflow."
+                            "Use the template reverse/escape transition on every item. "
+                            "Use only for cleanup flows that intentionally leave the normal workflow."
                         ),
                     },
                 },
@@ -863,6 +900,8 @@ async def _handle_create_issue(arguments: dict[str, Any]) -> list[TextContent]:
             deps=args.get("deps"),
             actor=actor,
         )
+    except WrongProjectError as e:
+        return _wrong_project_response(e)
     except ValueError as e:
         return _text(ErrorResponse(error=str(e), code=ErrorCode.VALIDATION))
     _refresh_summary()
@@ -883,6 +922,9 @@ async def _handle_update_issue(arguments: dict[str, Any]) -> list[TextContent]:
     expected_assignee = args.get("expected_assignee")
     if expected_assignee is not None and not isinstance(expected_assignee, str):
         return _text(ErrorResponse(error="expected_assignee must be a string", code=ErrorCode.VALIDATION))
+    force_overwrite_corrupt = args.get("force_overwrite_corrupt", False)
+    if not isinstance(force_overwrite_corrupt, bool):
+        return _text(ErrorResponse(error="force_overwrite_corrupt must be a boolean", code=ErrorCode.VALIDATION))
     tracker = _get_db()
     try:
         before = tracker.get_issue(args["issue_id"])
@@ -901,6 +943,7 @@ async def _handle_update_issue(arguments: dict[str, Any]) -> list[TextContent]:
             fields=args.get("fields"),
             actor=actor,
             expected_assignee=expected_assignee,
+            force_overwrite_corrupt=force_overwrite_corrupt,
         )
         _refresh_summary()
         changed = [attr for attr in _UPDATE_TRACKED_FIELDS if getattr(issue, attr) != getattr(before, attr)]
@@ -912,10 +955,11 @@ async def _handle_update_issue(arguments: dict[str, Any]) -> list[TextContent]:
         return _wrong_project_response(e)
     except ValueError as e:
         msg = str(e)
+        if isinstance(e, ClaimConflictError):
+            return _claim_conflict_response(e)
         if classify_value_error(msg) == ErrorCode.INVALID_TRANSITION:
-            return _text(_build_transition_error(tracker, args["issue_id"], msg))
-        if "assigned to" in msg and "expected" in msg:
-            return _text(ErrorResponse(error=msg, code=ErrorCode.CONFLICT))
+            transitions = e.valid_transitions if isinstance(e, InvalidTransitionError) else None
+            return _text(_build_transition_error(tracker, args["issue_id"], msg, valid_transitions=transitions))
         return _text(ErrorResponse(error=msg, code=ErrorCode.VALIDATION))
 
 
@@ -959,10 +1003,7 @@ async def _handle_close_issue(arguments: dict[str, Any]) -> list[TextContent]:
     except WrongProjectError as e:
         return _wrong_project_response(e)
     except ValueError as e:
-        msg = str(e)
-        if "assigned to" in msg and "expected" in msg:
-            return _text(ErrorResponse(error=msg, code=ErrorCode.CONFLICT))
-        return _text(_build_transition_error(tracker, args["issue_id"], msg))
+        return _issue_value_error_response(tracker, args["issue_id"], e)
 
 
 async def _handle_reopen_issue(arguments: dict[str, Any]) -> list[TextContent]:
@@ -985,7 +1026,7 @@ async def _handle_reopen_issue(arguments: dict[str, Any]) -> list[TextContent]:
     except WrongProjectError as e:
         return _wrong_project_response(e)
     except ValueError as e:
-        return _text(ErrorResponse(error=str(e), code=ErrorCode.INVALID_TRANSITION))
+        return _issue_value_error_response(tracker, args["issue_id"], e)
 
 
 async def _handle_search_issues(arguments: dict[str, Any]) -> list[TextContent]:
@@ -1044,11 +1085,14 @@ async def _handle_claim_issue(arguments: dict[str, Any]) -> list[TextContent]:
         return _text(ErrorResponse(error=f"Issue not found: {args['issue_id']}", code=ErrorCode.NOT_FOUND))
     except WrongProjectError as e:
         return _wrong_project_response(e)
+    except ClaimConflictError as e:
+        return _claim_conflict_response(e)
     except ValueError as e:
         msg = str(e)
-        if classify_value_error(msg) == ErrorCode.INVALID_TRANSITION:
+        code = classify_value_error(msg)
+        if code == ErrorCode.INVALID_TRANSITION:
             return _text(_build_transition_error(tracker, args["issue_id"], msg))
-        return _text(ErrorResponse(error=msg, code=ErrorCode.CONFLICT))
+        return _text(ErrorResponse(error=msg, code=code))
 
 
 async def _handle_release_claim(arguments: dict[str, Any]) -> list[TextContent]:
@@ -1086,8 +1130,12 @@ async def _handle_release_claim(arguments: dict[str, Any]) -> list[TextContent]:
         return _text(ErrorResponse(error=f"Issue not found: {args['issue_id']}", code=ErrorCode.NOT_FOUND))
     except WrongProjectError as e:
         return _wrong_project_response(e)
+    except InvalidTransitionError as e:
+        return _text(_build_transition_error(tracker, args["issue_id"], str(e), valid_transitions=e.valid_transitions))
+    except ClaimConflictError as e:
+        return _claim_conflict_response(e)
     except ValueError as e:
-        return _text(ErrorResponse(error=str(e), code=ErrorCode.CONFLICT))
+        return _release_claim_value_error_response(tracker, args["issue_id"], e)
 
 
 async def _handle_release_my_claims(arguments: dict[str, Any]) -> list[TextContent]:
@@ -1133,6 +1181,8 @@ async def _handle_release_my_claims(arguments: dict[str, Any]) -> list[TextConte
             revert_status=revert_status,
             reason=reason,
         )
+    except WrongProjectError as exc:
+        return _wrong_project_response(exc)
     except ValueError as exc:
         return _text(ErrorResponse(error=str(exc), code=ErrorCode.VALIDATION))
     if not dry_run:
@@ -1200,8 +1250,10 @@ async def _handle_heartbeat_work(arguments: dict[str, Any]) -> list[TextContent]
         return _text(ErrorResponse(error=f"Issue not found: {args['issue_id']}", code=ErrorCode.NOT_FOUND))
     except WrongProjectError as e:
         return _wrong_project_response(e)
+    except ClaimConflictError as e:
+        return _claim_conflict_response(e)
     except ValueError as e:
-        return _text(ErrorResponse(error=str(e), code=ErrorCode.CONFLICT))
+        return _issue_value_error_response(tracker, args["issue_id"], e)
 
 
 async def _handle_get_stale_claims(arguments: dict[str, Any]) -> list[TextContent]:
@@ -1263,8 +1315,10 @@ async def _handle_reclaim_issue(arguments: dict[str, Any]) -> list[TextContent]:
         return _text(ErrorResponse(error=f"Issue not found: {args['issue_id']}", code=ErrorCode.NOT_FOUND))
     except WrongProjectError as e:
         return _wrong_project_response(e)
+    except ClaimConflictError as e:
+        return _claim_conflict_response(e)
     except ValueError as e:
-        return _text(ErrorResponse(error=str(e), code=ErrorCode.CONFLICT))
+        return _issue_value_error_response(tracker, args["issue_id"], e)
 
 
 async def _handle_claim_next(arguments: dict[str, Any]) -> list[TextContent]:
@@ -1327,13 +1381,17 @@ async def _handle_batch_close(arguments: dict[str, Any]) -> list[TextContent]:
     if not all(isinstance(i, str) for i in issue_ids):
         return _text(ErrorResponse(error="All issue IDs must be strings", code=ErrorCode.VALIDATION))
     ready_before = {i.id for i in tracker.get_ready()}
-    closed, failed = tracker.batch_close(
-        issue_ids,
-        reason=args.get("reason", ""),
-        actor=actor,
-        expected_assignee=expected_assignee,
-        force=force,
-    )
+    try:
+        closed, failed = tracker.batch_close(
+            issue_ids,
+            reason=args.get("reason", ""),
+            actor=actor,
+            expected_assignee=expected_assignee,
+            force=force,
+        )
+    except WrongProjectError as e:
+        # 2.1.0 §0.4: envelope-level abort on foreign-prefix.
+        return _wrong_project_response(e)
     _refresh_summary()
     ready_after = tracker.get_ready()
     newly_unblocked = [i for i in ready_after if i.id not in ready_before]
@@ -1378,15 +1436,19 @@ async def _handle_batch_update(arguments: dict[str, Any]) -> list[TextContent]:
     u_fields = args.get("fields")
     if u_fields is not None and not isinstance(u_fields, dict):
         return _text(ErrorResponse(error="fields must be a JSON object", code=ErrorCode.VALIDATION))
-    updated, update_failed = tracker.batch_update(
-        issue_ids,
-        status=args.get("status"),
-        priority=priority,
-        assignee=args.get("assignee"),
-        fields=u_fields,
-        actor=actor,
-        expected_assignee=expected_assignee,
-    )
+    try:
+        updated, update_failed = tracker.batch_update(
+            issue_ids,
+            status=args.get("status"),
+            priority=priority,
+            assignee=args.get("assignee"),
+            fields=u_fields,
+            actor=actor,
+            expected_assignee=expected_assignee,
+        )
+    except WrongProjectError as e:
+        # 2.1.0 §0.4: envelope-level abort on foreign-prefix.
+        return _wrong_project_response(e)
     _refresh_summary()
     if detail == "full":
         full_result: BatchResponse[PublicIssue] = BatchResponse(
@@ -1424,13 +1486,22 @@ async def _handle_start_work(arguments: dict[str, Any]) -> list[TextContent]:
     except WrongProjectError as e:
         return _wrong_project_response(e)
     except (AmbiguousTransitionError, InvalidTransitionError) as e:
+        if isinstance(e, InvalidTransitionError):
+            return _text(_build_transition_error(tracker, args["issue_id"], str(e), valid_transitions=e.valid_transitions))
         return _text(ErrorResponse(error=str(e), code=ErrorCode.INVALID_TRANSITION))
+    except ClaimConflictError as e:
+        # Optimistic-lock conflict — emit a structured CONFLICT envelope so
+        # MCP consumers can distinguish ownership races from validation
+        # failures. Mirrors the ``claim`` / ``release_claim`` / ``reclaim``
+        # MCP handlers; without this branch the conflict falls through to
+        # the generic ``ValueError`` arm and is misclassified as VALIDATION.
+        return _claim_conflict_response(e)
     except ValueError as e:
         msg = str(e)
         code = classify_value_error(msg)
         if code == ErrorCode.INVALID_TRANSITION:
             return _text(_build_transition_error(tracker, args["issue_id"], msg))
-        return _text(ErrorResponse(error=msg, code=ErrorCode.CONFLICT))
+        return _text(ErrorResponse(error=msg, code=code))
     _refresh_summary()
     return _text(issue_to_public(issue))
 

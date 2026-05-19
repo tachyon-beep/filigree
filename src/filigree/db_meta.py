@@ -12,13 +12,15 @@ import sqlite3
 from pathlib import Path
 from typing import Any, ClassVar
 
-from filigree.db_base import DBMixinProtocol, _normalize_iso_to_utc, _now_iso
+from filigree.db_base import DBMixinProtocol, _in_immediate_tx, _normalize_iso_to_utc, _now_iso, _retry_busy
 from filigree.db_files import VALID_FINDING_STATUSES, VALID_SEVERITIES
 from filigree.db_issues import _check_expected_assignee
 from filigree.db_observations import _expires_iso
 from filigree.types.planning import CommentRecord, StatsResult
 
 logger = logging.getLogger(__name__)
+
+_VALID_FILE_REGISTRY_BACKENDS = frozenset({"local", "clarion"})
 
 
 class MetaMixin(DBMixinProtocol):
@@ -32,6 +34,8 @@ class MetaMixin(DBMixinProtocol):
 
     # -- Comments ------------------------------------------------------------
 
+    @_retry_busy()
+    @_in_immediate_tx("add_comment")
     def add_comment(
         self,
         issue_id: str,
@@ -39,6 +43,7 @@ class MetaMixin(DBMixinProtocol):
         *,
         author: str = "",
         expected_assignee: str | None = None,
+        _skip_begin: bool = False,
     ) -> int:
         if not text or not text.strip():
             msg = "Comment text cannot be empty"
@@ -50,15 +55,10 @@ class MetaMixin(DBMixinProtocol):
             raise KeyError(msg)
         _check_expected_assignee(issue_id, expected_assignee, row["assignee"] or "", actor=author)
         now = _now_iso()
-        try:
-            cursor = self.conn.execute(
-                "INSERT INTO comments (issue_id, author, text, created_at) VALUES (?, ?, ?, ?)",
-                (issue_id, author, text, now),
-            )
-            self.conn.commit()
-        except Exception:
-            self.conn.rollback()
-            raise
+        cursor = self.conn.execute(
+            "INSERT INTO comments (issue_id, author, text, created_at) VALUES (?, ?, ?, ?)",
+            (issue_id, author, text, now),
+        )
         rowid = cursor.lastrowid
         if rowid is None:  # pragma: no cover — INSERT always sets lastrowid
             msg = "INSERT did not produce a lastrowid"
@@ -84,6 +84,8 @@ class MetaMixin(DBMixinProtocol):
 
     # -- Labels --------------------------------------------------------------
 
+    @_retry_busy()
+    @_in_immediate_tx("add_label")
     def add_label(
         self,
         issue_id: str,
@@ -91,6 +93,7 @@ class MetaMixin(DBMixinProtocol):
         *,
         actor: str = "",
         expected_assignee: str | None = None,
+        _skip_begin: bool = False,
     ) -> tuple[bool, str, list[str]]:
         """Add label to issue. Returns (added, canonical_label, replaced_labels).
 
@@ -132,23 +135,20 @@ class MetaMixin(DBMixinProtocol):
             # Capture the set of labels we're about to displace so callers can
             # report the silent removal (P2.7).
             replaced = sorted(lbl for lbl in existing_review if lbl != normalized)
-        try:
-            # Mutual exclusivity for review: namespace
-            if normalized.startswith("review:"):
-                self.conn.execute(
-                    "DELETE FROM labels WHERE issue_id = ? AND label LIKE 'review:%'",
-                    (issue_id,),
-                )
-            cursor = self.conn.execute(
-                "INSERT OR IGNORE INTO labels (issue_id, label) VALUES (?, ?)",
-                (issue_id, normalized),
+        # Mutual exclusivity for review: namespace
+        if normalized.startswith("review:"):
+            self.conn.execute(
+                "DELETE FROM labels WHERE issue_id = ? AND label LIKE 'review:%'",
+                (issue_id,),
             )
-            self.conn.commit()
-        except Exception:
-            self.conn.rollback()
-            raise
+        cursor = self.conn.execute(
+            "INSERT OR IGNORE INTO labels (issue_id, label) VALUES (?, ?)",
+            (issue_id, normalized),
+        )
         return cursor.rowcount > 0, normalized, replaced
 
+    @_retry_busy()
+    @_in_immediate_tx("remove_label")
     def remove_label(
         self,
         issue_id: str,
@@ -156,6 +156,7 @@ class MetaMixin(DBMixinProtocol):
         *,
         actor: str = "",
         expected_assignee: str | None = None,
+        _skip_begin: bool = False,
     ) -> tuple[bool, str]:
         """Remove label from issue. Returns (removed, canonical_label).
 
@@ -170,15 +171,10 @@ class MetaMixin(DBMixinProtocol):
             raise KeyError(msg)
         _check_expected_assignee(issue_id, expected_assignee, row["assignee"] or "", actor=actor)
         normalized = self._validate_label_name(label, allow_priority_like=True)
-        try:
-            cursor = self.conn.execute(
-                "DELETE FROM labels WHERE issue_id = ? AND label = ?",
-                (issue_id, normalized),
-            )
-            self.conn.commit()
-        except Exception:
-            self.conn.rollback()
-            raise
+        cursor = self.conn.execute(
+            "DELETE FROM labels WHERE issue_id = ? AND label = ?",
+            (issue_id, normalized),
+        )
         return cursor.rowcount > 0, normalized
 
     def list_labels(
@@ -470,10 +466,18 @@ class MetaMixin(DBMixinProtocol):
         return inserted
 
     def bulk_insert_event(self, event_data: dict[str, Any]) -> bool:
-        """Insert an event. Returns True if inserted, False if skipped (duplicate)."""
+        """Insert an event. Returns True if inserted, False if skipped (duplicate).
+
+        v16: ``event_seq`` is forwarded from ``event_data`` when present so
+        JSONL round-trips preserve per-issue sequence numbers; legacy
+        callers that omit it default to 0 (matching the migration's
+        backfill of pre-v16 rows). ``INSERT OR IGNORE`` is retained on
+        purpose for this path — imports re-applied against the same DB
+        should be idempotent on the full composite key, not raise.
+        """
         cursor = self.conn.execute(
-            "INSERT OR IGNORE INTO events (issue_id, event_type, actor, old_value, new_value, comment, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "INSERT OR IGNORE INTO events (issue_id, event_type, actor, old_value, new_value, comment, created_at, event_seq) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 event_data["issue_id"],
                 event_data["event_type"],
@@ -482,6 +486,7 @@ class MetaMixin(DBMixinProtocol):
                 event_data.get("new_value"),
                 event_data.get("comment", ""),
                 event_data.get("created_at", _now_iso()),
+                int(event_data.get("event_seq", 0)),
             ),
         )
         inserted = cursor.rowcount > 0
@@ -606,14 +611,25 @@ class MetaMixin(DBMixinProtocol):
     ) -> int:
         src_id = record["id"]
         path = record["path"]
+        registry_backend = record.get("registry_backend", "local") or "local"
+        if not isinstance(registry_backend, str) or registry_backend not in _VALID_FILE_REGISTRY_BACKENDS:
+            msg = f"Invalid registry_backend {registry_backend!r} for imported file_record {src_id!r}"
+            raise ValueError(msg)
+        content_hash = record.get("content_hash", "") or ""
+        if not isinstance(content_hash, str):
+            msg = f"Invalid content_hash for imported file_record {src_id!r}: expected string"
+            raise ValueError(msg)
         cursor = self.conn.execute(
-            f"INSERT {conflict} INTO file_records (id, path, language, file_type, first_seen, updated_at, metadata) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            f"INSERT {conflict} INTO file_records "
+            "(id, path, language, file_type, content_hash, registry_backend, first_seen, updated_at, metadata) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 src_id,
                 path,
                 record.get("language", ""),
                 record.get("file_type", ""),
+                content_hash,
+                registry_backend,
                 _normalize_iso_to_utc(record.get("first_seen")) or _now_iso(),
                 _normalize_iso_to_utc(record.get("updated_at")) or _now_iso(),
                 self._json_text(record.get("metadata", {})),
@@ -1091,8 +1107,8 @@ class MetaMixin(DBMixinProtocol):
                 # (filigree-20911dfe6d)
                 cursor = self.conn.execute(
                     f"INSERT {conflict} INTO events "
-                    "(issue_id, event_type, actor, old_value, new_value, comment, created_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    "(issue_id, event_type, actor, old_value, new_value, comment, created_at, event_seq) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         record.get("issue_id", ""),
                         record.get("event_type", ""),
@@ -1101,6 +1117,7 @@ class MetaMixin(DBMixinProtocol):
                         record.get("new_value"),
                         record.get("comment", ""),
                         _normalize_iso_to_utc(record.get("created_at")) or _now_iso(),
+                        int(record.get("event_seq", 0)),
                     ),
                 )
                 count += cursor.rowcount

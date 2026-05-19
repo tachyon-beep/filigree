@@ -72,6 +72,24 @@ _EXPECTED_PROJECT_CONFIG_ERRORS = (ProjectNotInitialisedError, ValueError, TypeE
 _db: FiligreeDB | None = None
 _config: dict[str, Any] = {}
 
+# 2.1.0 §1.1: opt-in gate for accepting ``force=true`` on HTTP batch-close
+# routes. Default-off — HTTP callers can't bypass the workflow validator
+# without the operator explicitly starting the dashboard with
+# ``--allow-http-force-close``. Toggled by ``main()`` at process startup.
+_allow_http_force_close: bool = False
+
+
+def _get_allow_http_force_close() -> bool:
+    """Accessor so route handlers read the current flag at request time.
+
+    A plain ``from filigree.dashboard import _allow_http_force_close``
+    would bind the bool by value at import; tests and ``main()`` both
+    mutate this module attribute, so the routes need a function-level
+    read instead.
+    """
+    return _allow_http_force_close
+
+
 # Idle auto-shutdown for ethereal mode (seconds)
 IDLE_TIMEOUT_SECONDS = 3600  # 1 hour
 IDLE_CHECK_INTERVAL = 60  # check every minute
@@ -81,7 +99,12 @@ _last_request_time: float = 0.0  # monotonic clock; set at startup
 _current_project_key: ContextVar[str] = ContextVar("project_key", default="")
 
 
-def _open_db_for_filigree_dir(filigree_dir: Path, *, check_same_thread: bool = True) -> FiligreeDB:
+def _open_db_for_filigree_dir(
+    filigree_dir: Path,
+    *,
+    check_same_thread: bool = True,
+    allow_local_fallback_override: bool | None = None,
+) -> FiligreeDB:
     """Open the project DB for *filigree_dir*, honouring ``.filigree.conf``.
 
     Mirrors the canonical CLI pattern (``cli_common._build_db``): when a
@@ -91,11 +114,25 @@ def _open_db_for_filigree_dir(filigree_dir: Path, *, check_same_thread: bool = T
     Without this, the dashboard silently opened ``.filigree/filigree.db`` while
     the CLI/MCP — which goes through ``cli_common.py`` — opened the conf-
     declared path, producing a split-brain view. (filigree-da8d5aba0f)
+
+    ``allow_local_fallback_override`` is forwarded so the dashboard's
+    ``--allow-local-fallback`` flag flows into the ADR-014 capability probe
+    *before* it runs at ``FiligreeDB.__init__`` — otherwise a project whose
+    config disables fallback would fail to construct against an offline
+    Clarion even though the operator just asked for fallback at startup.
     """
     conf_path = filigree_dir.parent / CONF_FILENAME
     if conf_path.is_file():
-        return FiligreeDB.from_conf(conf_path, check_same_thread=check_same_thread)
-    return FiligreeDB.from_filigree_dir(filigree_dir, check_same_thread=check_same_thread)
+        return FiligreeDB.from_conf(
+            conf_path,
+            check_same_thread=check_same_thread,
+            allow_local_fallback_override=allow_local_fallback_override,
+        )
+    return FiligreeDB.from_filigree_dir(
+        filigree_dir,
+        check_same_thread=check_same_thread,
+        allow_local_fallback_override=allow_local_fallback_override,
+    )
 
 
 class ProjectStore:
@@ -242,8 +279,8 @@ class ProjectStore:
                 if db is not None:
                     db.close()
                 raise
-            except _EXPECTED_PROJECT_CONFIG_ERRORS:
-                logger.warning("Invalid project configuration for key=%r path=%s", key, filigree_path)
+            except _EXPECTED_PROJECT_CONFIG_ERRORS as exc:
+                logger.warning("Invalid project configuration for key=%r path=%s: %s", key, filigree_path, exc)
                 if db is not None:
                     db.close()
                 raise
@@ -690,22 +727,45 @@ def _idle_watchdog(timeout: float, check_interval: float) -> None:
 
 def _exit_dashboard_config_error(exc: BaseException) -> None:
     """Exit dashboard startup cleanly for expected project configuration errors."""
-    logger.warning("dashboard_project_config_error", extra={"tool": "dashboard", "args_data": {"error": str(exc)}})
+    logger.warning("dashboard_project_config_error", extra={"tool": "dashboard", "args_data": {"error": _safe_log_error(exc)}})
     print(f"Error loading dashboard project: {exc}", file=sys.stderr)
     print("Run `filigree doctor` for diagnosis.", file=sys.stderr)
     sys.exit(1)
 
 
-def main(port: int = DEFAULT_PORT, *, no_browser: bool = False, server_mode: bool = False) -> None:
+def _safe_log_error(exc: BaseException) -> str:
+    """Return a path/redaction-safe message for structured log payloads."""
+    safe = getattr(exc, "safe_message", None)
+    return safe if isinstance(safe, str) else str(exc)
+
+
+def main(
+    port: int = DEFAULT_PORT,
+    *,
+    no_browser: bool = False,
+    server_mode: bool = False,
+    allow_http_force_close: bool = False,
+    allow_local_fallback: bool = False,
+) -> None:
     """Start the dashboard server.
 
     In server mode, reads ``server.json`` for multi-project routing.
     In ethereal mode (default), serves the single local project.
     Ethereal servers auto-shutdown after IDLE_TIMEOUT_SECONDS of inactivity.
+
+    ``allow_http_force_close`` (2.1.0 §1.1) opts the dashboard into
+    accepting ``force=true`` on ``POST /api/batch/close`` and
+    ``POST /api/loom/batch/close``. Without it those routes reject
+    ``force=true`` with 400/VALIDATION — the workflow escape lane can only
+    be used by the CLI or MCP, never by a passing HTTP client.
+
+    ``allow_local_fallback`` is an ADR-014 recovery flag for single-project
+    ethereal mode: when the project is configured for Clarion registry mode
+    but Clarion is unavailable, auto-create paths use ``LocalRegistry``.
     """
     import uvicorn
 
-    global _db, _last_request_time, _project_store
+    global _db, _last_request_time, _project_store, _allow_http_force_close
 
     filigree_dir: Path | None = None
 
@@ -720,6 +780,7 @@ def main(port: int = DEFAULT_PORT, *, no_browser: bool = False, server_mode: boo
     _project_store = None
     _db = None
     _config.clear()
+    _allow_http_force_close = allow_http_force_close
 
     if server_mode:
         try:
@@ -736,7 +797,15 @@ def main(port: int = DEFAULT_PORT, *, no_browser: bool = False, server_mode: boo
             filigree_dir = project_root / FILIGREE_DIR_NAME
             config = read_config(filigree_dir)
             _config.update(config)
-            _db = _open_db_for_filigree_dir(filigree_dir, check_same_thread=False)
+            db = _open_db_for_filigree_dir(
+                filigree_dir,
+                check_same_thread=False,
+                allow_local_fallback_override=True if allow_local_fallback else None,
+            )
+            if allow_local_fallback and db.registry_backend == "clarion":
+                logger.warning("dashboard started with --allow-local-fallback; clarion registry is bypassed for auto-creates")
+                db.enable_local_registry_fallback()
+            _db = db
         except SchemaVersionMismatchError as exc:
             # Forward schema mismatch — exit cleanly (code 3, matching
             # `filigree doctor`) with the shared guidance text instead of
@@ -763,7 +832,7 @@ def main(port: int = DEFAULT_PORT, *, no_browser: bool = False, server_mode: boo
             # is reserved for forward schema mismatch.
             logger.warning(
                 "dashboard_db_open_failed",
-                extra={"tool": "dashboard", "args_data": {"error": str(exc)}},
+                extra={"tool": "dashboard", "args_data": {"error": _safe_log_error(exc)}},
             )
             print(f"Error opening project database: {exc}", file=sys.stderr)
             print("Run `filigree doctor` for diagnosis.", file=sys.stderr)
@@ -807,4 +876,5 @@ def main(port: int = DEFAULT_PORT, *, no_browser: bool = False, server_mode: boo
         # cannot serve a stale ``name`` (filigree-154a23794c).
         _project_store = None
         _db = None
+        _allow_http_force_close = False
         _config.clear()

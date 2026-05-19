@@ -19,6 +19,7 @@ from filigree.types.core import (
     FindingStatus,
     ISOTimestamp,
     IssueDict,
+    RegistryBackend,
     ScanFindingDict,
     Severity,
     StatusCategory,
@@ -118,10 +119,20 @@ class Issue:
 
 @dataclass
 class FileRecord:
+    """Stored file identity and registry metadata.
+
+    ``content_hash == ''`` is the intentional sentinel for
+    ``registry_backend == 'local'`` because the local backend cannot compute a
+    drift hash. Clarion-backed records must carry a non-empty hash; the
+    Clarion registry client rejects blank hashes before rows are written.
+    """
+
     id: str
     path: str
     language: str = ""
     file_type: str = ""
+    content_hash: str = ""
+    registry_backend: RegistryBackend = "local"
     created_by: str = ""
     updated_by: str = ""
     first_seen: ISOTimestamp = _EMPTY_TS
@@ -140,6 +151,8 @@ class FileRecord:
             path=self.path,
             language=self.language,
             file_type=self.file_type,
+            content_hash=self.content_hash,
+            registry_backend=self.registry_backend,
             created_by=self.created_by,
             updated_by=self.updated_by,
             first_seen=self.first_seen,

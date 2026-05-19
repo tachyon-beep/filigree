@@ -11,6 +11,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from filigree.core import FiligreeDB
+from filigree.types.api import ClaimConflictError, InvalidTransitionError
 from tests.conftest import PopulatedDB
 
 
@@ -486,6 +487,46 @@ class TestUpdateIssuePaths:
         updated = db.update_issue(issue.id, fields={"b": "updated", "c": "3"})
         assert updated.fields == {"a": "1", "b": "updated", "c": "3"}
 
+    def test_update_issue_refuses_corrupt_fields_merge(self, db: FiligreeDB) -> None:
+        issue = db.create_issue("Corrupt fields merge")
+        raw_fields = b"{bad json"
+        db.conn.execute("UPDATE issues SET fields = ? WHERE id = ?", (raw_fields, issue.id))
+        db.conn.commit()
+
+        with pytest.raises(ValueError, match="Refusing to merge fields"):
+            db.update_issue(issue.id, fields={"b": "2"})
+
+        row = db.conn.execute("SELECT fields FROM issues WHERE id = ?", (issue.id,)).fetchone()
+        assert row["fields"] == raw_fields
+        events = db.conn.execute(
+            "SELECT event_type FROM events WHERE issue_id = ? AND event_type = 'corrupt_fields_overwritten'",
+            (issue.id,),
+        ).fetchall()
+        assert events == []
+
+    def test_update_issue_force_overwrite_corrupt_emits_event_with_raw_bytes(self, db: FiligreeDB) -> None:
+        issue = db.create_issue("Force corrupt fields overwrite")
+        raw_fields = b"{bad json"
+        db.conn.execute("UPDATE issues SET fields = ? WHERE id = ?", (raw_fields, issue.id))
+        db.conn.commit()
+
+        updated = db.update_issue(issue.id, fields={"b": "2"}, actor="tester", force_overwrite_corrupt=True)
+
+        assert updated.fields == {"b": "2"}
+        event = db.conn.execute(
+            "SELECT actor, old_value, new_value FROM events WHERE issue_id = ? AND event_type = 'corrupt_fields_overwritten'",
+            (issue.id,),
+        ).fetchone()
+        assert event is not None
+        assert event["actor"] == "tester"
+        assert event["old_value"] == raw_fields
+        assert json.loads(event["new_value"]) == {"b": "2"}
+        fields_changed = db.conn.execute(
+            "SELECT COUNT(*) FROM events WHERE issue_id = ? AND event_type = 'fields_changed'",
+            (issue.id,),
+        ).fetchone()[0]
+        assert fields_changed == 0
+
     def test_update_no_changes(self, db: FiligreeDB) -> None:
         """Update with no actual changes should not error."""
         issue = db.create_issue("No change")
@@ -824,13 +865,17 @@ class TestClaimNextExhaustion:
         result = db.claim_next("agent2")
         assert result is None
 
-    def test_claim_next_logs_on_race_exhaustion(self, db: FiligreeDB) -> None:
-        """When claim_issue raises ValueError for all candidates, warn about exhaustion."""
+    def test_claim_next_logs_on_claim_conflict_exhaustion(self, db: FiligreeDB) -> None:
+        """When claim_issue raises ClaimConflictError for all candidates, warn about exhaustion."""
         db.create_issue("Target")
 
-        # Simulate claim_issue always raising ValueError (race condition)
+        # Simulate claim_issue always raising ClaimConflictError (claim race)
         with (
-            patch.object(db, "claim_issue", side_effect=ValueError("race")),
+            patch.object(
+                db,
+                "claim_issue",
+                side_effect=ClaimConflictError("test-race", observed="other", expected="agent2"),
+            ),
             patch("filigree.db_issues.logger") as mock_logger,
         ):
             result = db.claim_next("agent2")
@@ -838,6 +883,45 @@ class TestClaimNextExhaustion:
         assert result is None
         mock_logger.warning.assert_called_once()
         assert "failed to claim" in str(mock_logger.warning.call_args)
+
+    def test_claim_next_skips_status_mismatch_candidate(self, db: FiligreeDB, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A claim-phase status mismatch means this ready candidate went stale."""
+        stale = db.create_issue("Stale candidate", priority=0)
+        survivor = db.create_issue("Survivor candidate", priority=1)
+        real_claim_issue = db.claim_issue
+
+        def status_mismatch_once(issue_id: str, *args: object, **kwargs: object) -> object:
+            if issue_id == stale.id:
+                raise ValueError(f"Cannot claim {issue_id}: status is 'closed', expected open-category state or wip-category handoff state")
+            return real_claim_issue(issue_id, *args, **kwargs)
+
+        monkeypatch.setattr(db, "claim_issue", status_mismatch_once)
+
+        result = db.claim_next("agent2")
+
+        assert result is not None
+        assert result.id == survivor.id
+        assert result.assignee == "agent2"
+
+    def test_claim_next_propagates_validation_bug_from_claim_phase(self, db: FiligreeDB) -> None:
+        """Bug-class ValueError from claim_issue must not be hidden as a race."""
+        db.create_issue("Target")
+
+        with (
+            patch.object(db, "claim_issue", side_effect=ValueError("invariant exploded")),
+            pytest.raises(ValueError, match="invariant exploded"),
+        ):
+            db.claim_next("agent2")
+
+    def test_claim_next_propagates_invalid_transition_from_claim_phase(self, db: FiligreeDB) -> None:
+        """InvalidTransitionError is a ValueError subclass, but it is not a claim race."""
+        db.create_issue("Target")
+
+        with (
+            patch.object(db, "claim_issue", side_effect=InvalidTransitionError("task", "open")),
+            pytest.raises(InvalidTransitionError),
+        ):
+            db.claim_next("agent2")
 
     def test_claim_next_skips_deleted_issue(self, db: FiligreeDB) -> None:
         """Bug filigree-e55da01144: KeyError from deleted issue must be caught, not propagated."""
@@ -894,7 +978,7 @@ class TestCreateIssuePartialWriteRollback:
         issues_before = len(db.list_issues())
 
         with pytest.raises(ValueError, match="Invalid dependency IDs"):
-            db.create_issue("Orphan candidate", deps=["nonexistent-dep-id"])
+            db.create_issue("Orphan candidate", deps=["test-missing-dep"])
 
         # Force a commit to simulate MCP's long-lived connection
         db.conn.commit()
@@ -909,7 +993,7 @@ class TestCreateIssuePartialWriteRollback:
         events_before = db.conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
 
         with pytest.raises(ValueError, match="Invalid dependency IDs"):
-            db.create_issue("Event orphan candidate", deps=["ghost-id"])
+            db.create_issue("Event orphan candidate", deps=["test-ghost"])
 
         # Force commit
         db.conn.commit()
@@ -924,7 +1008,7 @@ class TestCreateIssuePartialWriteRollback:
         labels_before = db.conn.execute("SELECT COUNT(*) FROM labels").fetchone()[0]
 
         with pytest.raises(ValueError, match="Invalid dependency IDs"):
-            db.create_issue("Label orphan", labels=["defect", "urgent"], deps=["missing-id"])
+            db.create_issue("Label orphan", labels=["defect", "urgent"], deps=["test-missing"])
 
         db.conn.commit()
 
@@ -1108,6 +1192,84 @@ class TestImportJsonl:
         assert fresh.conn.execute("SELECT COUNT(*) FROM file_associations").fetchone()[0] == 1
         assert fresh.conn.execute("SELECT COUNT(*) FROM file_events").fetchone()[0] == 1
         fresh.close()
+
+    def test_import_preserves_file_registry_metadata(self, tmp_path: Path) -> None:
+        jsonl = tmp_path / "clarion-file.jsonl"
+        jsonl.write_text(
+            json.dumps(
+                {
+                    "_type": "file_record",
+                    "id": "core:file:src/imported.py",
+                    "path": "src/imported.py",
+                    "language": "python",
+                    "file_type": "source",
+                    "content_hash": "sha256:imported",
+                    "registry_backend": "clarion",
+                    "first_seen": "2026-01-01T00:00:00+00:00",
+                    "updated_at": "2026-01-01T00:00:00+00:00",
+                    "metadata": {"owner": "clarion"},
+                }
+            )
+            + "\n"
+        )
+
+        fresh = FiligreeDB(tmp_path / "fresh-clarion-file.db", prefix="test")
+        fresh.initialize()
+        fresh.import_jsonl(jsonl)
+
+        row = fresh.conn.execute(
+            "SELECT id, content_hash, registry_backend, metadata FROM file_records WHERE path = ?",
+            ("src/imported.py",),
+        ).fetchone()
+        assert dict(row) == {
+            "id": "core:file:src/imported.py",
+            "content_hash": "sha256:imported",
+            "registry_backend": "clarion",
+            "metadata": '{"owner": "clarion"}',
+        }
+        fresh.close()
+
+    def test_import_rejects_invalid_file_registry_backend(self, db: FiligreeDB, tmp_path: Path) -> None:
+        jsonl = tmp_path / "bad-file-registry.jsonl"
+        jsonl.write_text(
+            json.dumps(
+                {
+                    "_type": "file_record",
+                    "id": "test-file-bad-registry",
+                    "path": "src/bad_registry.py",
+                    "registry_backend": "remote",
+                    "first_seen": "2026-01-01T00:00:00+00:00",
+                    "updated_at": "2026-01-01T00:00:00+00:00",
+                }
+            )
+            + "\n"
+        )
+
+        with pytest.raises(ValueError, match="Invalid registry_backend"):
+            db.import_jsonl(jsonl)
+
+    def test_import_legacy_file_record_defaults_registry_metadata(self, db: FiligreeDB, tmp_path: Path) -> None:
+        jsonl = tmp_path / "legacy-file-record.jsonl"
+        jsonl.write_text(
+            json.dumps(
+                {
+                    "_type": "file_record",
+                    "id": "test-file-legacy",
+                    "path": "src/legacy.py",
+                    "first_seen": "2026-01-01T00:00:00+00:00",
+                    "updated_at": "2026-01-01T00:00:00+00:00",
+                }
+            )
+            + "\n"
+        )
+
+        db.import_jsonl(jsonl)
+
+        row = db.conn.execute(
+            "SELECT content_hash, registry_backend FROM file_records WHERE id = ?",
+            ("test-file-legacy",),
+        ).fetchone()
+        assert dict(row) == {"content_hash": "", "registry_backend": "local"}
 
     def test_import_roundtrip_reconciles_seeded_future_singleton(self, db: FiligreeDB, tmp_path: Path) -> None:
         out = tmp_path / "future-roundtrip.jsonl"
@@ -2590,6 +2752,8 @@ class TestImportJsonlErrorPaths:
                 '{"version": "Future"}',
             ),
         )
+        db.conn.commit()  # Close implicit DEFERRED tx — create_issue's
+        # IMMEDIATE-tx decorator (2.1.0 §2.1) rejects nested BEGINs.
         other = db.create_issue("Other task")
         db.conn.execute(
             "INSERT INTO dependencies (issue_id, depends_on_id, type, created_at) VALUES (?, ?, ?, ?)",

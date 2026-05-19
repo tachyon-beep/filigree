@@ -8,8 +8,11 @@ these tests verify the MCP integration layer on top.
 from __future__ import annotations
 
 from filigree.core import FiligreeDB
-from filigree.mcp_server import call_tool  # type: ignore[attr-defined]
+from filigree.mcp_server import call_tool
+from filigree.registry import RegistryFileNotFoundError, RegistryUnavailableError, ResolvedFile
 from filigree.types.api import ErrorCode
+from filigree.types.core import make_entity_id
+from tests._fakes.registry import FixedRegistry
 from tests.mcp._helpers import _parse
 
 
@@ -78,6 +81,124 @@ class TestListFindingsTool:
 
 
 class TestReportFindingTool:
+    async def test_report_finding_uses_registry_resolved_file_id(self, mcp_db: FiligreeDB) -> None:
+        mcp_db.registry = FixedRegistry(file_id="core:file:report-target@src/report_target.py")
+
+        data = _parse(
+            await call_tool(
+                "report_finding",
+                {
+                    "file_path": "src/report_target.py",
+                    "rule_id": "agent-noted-risk",
+                    "message": "Agent spotted a follow-up risk",
+                    "severity": "medium",
+                    "line_start": 7,
+                },
+            )
+        )
+
+        assert data["file_id"] == "core:file:report-target@src/report_target.py"
+
+    async def test_report_finding_registry_unavailable_returns_error_response(self, mcp_db: FiligreeDB) -> None:
+        class UnavailableRegistry:
+            def resolve_file(self, path: str, *, language: str = "", actor: str = "") -> ResolvedFile:
+                raise RegistryUnavailableError(
+                    "Clarion registry unavailable for test",
+                    url="http://clarion.test/api/v1/files?path=src%2Freport_target.py",
+                    path=path,
+                    cause_kind="network",
+                )
+
+            def is_displaced(self) -> bool:
+                return False
+
+        mcp_db.registry = UnavailableRegistry()
+
+        data = _parse(
+            await call_tool(
+                "report_finding",
+                {
+                    "file_path": "src/report_target.py",
+                    "rule_id": "agent-noted-risk",
+                    "message": "Agent spotted a follow-up risk",
+                    "severity": "medium",
+                },
+            )
+        )
+
+        assert data["code"] == ErrorCode.REGISTRY_UNAVAILABLE
+        assert data["details"]["cause"] == "registry_unavailable"
+        assert data["details"]["cause_kind"] == "network"
+        assert data["details"]["path"] == "src/report_target.py"
+        assert data["details"]["url"] == "http://clarion.test/api/v1/files?path=src%2Freport_target.py"
+        assert "Registry unavailable" in data["error"]
+        assert data["details"]["cause"] == "registry_unavailable"
+
+    async def test_report_finding_registry_file_not_found_returns_not_found(self, mcp_db: FiligreeDB) -> None:
+        class MissingFileRegistry:
+            def resolve_file(self, path: str, *, language: str = "", actor: str = "") -> ResolvedFile:
+                raise RegistryFileNotFoundError(
+                    "Clarion registry could not resolve file at http://clarion.test/api/v1/files?path=missing.py: HTTP 404 not indexed",
+                    status_code=404,
+                    url="http://clarion.test/api/v1/files?path=missing.py",
+                )
+
+            def is_displaced(self) -> bool:
+                return False
+
+        mcp_db.registry = MissingFileRegistry()
+
+        data = _parse(
+            await call_tool(
+                "report_finding",
+                {
+                    "file_path": "missing.py",
+                    "rule_id": "agent-noted-risk",
+                    "message": "Agent spotted a follow-up risk",
+                    "severity": "medium",
+                },
+            )
+        )
+
+        assert data["code"] == ErrorCode.NOT_FOUND
+        assert data["details"]["cause"] == "registry_file_not_found"
+
+    async def test_report_finding_does_not_register_file_after_ingest(self, mcp_db: FiligreeDB) -> None:
+        class CountingCanonicalRegistry:
+            resolve_calls = 0
+
+            def resolve_file(self, path: str, *, language: str = "", actor: str = "") -> ResolvedFile:
+                self.resolve_calls += 1
+                canonical_path = path.casefold()
+                return {
+                    "file_id": make_entity_id(f"core:file:{canonical_path.replace('/', ':')}"),
+                    "content_hash": f"hash:{canonical_path}",
+                    "canonical_path": canonical_path,
+                    "language": language,
+                    "registry_backend": "clarion",
+                }
+
+            def is_displaced(self) -> bool:
+                return False
+
+        registry = CountingCanonicalRegistry()
+        mcp_db.registry = registry
+
+        data = _parse(
+            await call_tool(
+                "report_finding",
+                {
+                    "file_path": "SRC/Report_Target.py",
+                    "rule_id": "agent-noted-risk",
+                    "message": "Agent spotted a follow-up risk",
+                    "severity": "medium",
+                },
+            )
+        )
+
+        assert data["file_id"] == "core:file:src:report_target.py"
+        assert registry.resolve_calls == 1
+
     async def test_report_finding_default_does_not_create_observation(self, mcp_db: FiligreeDB) -> None:
         data = _parse(
             await call_tool(
@@ -120,6 +241,52 @@ class TestReportFindingTool:
         assert data["observations_created"] == 1
         assert data["observation_id"] == observations[0]["id"]
         assert data["observation_ids"] == [observations[0]["id"]]
+
+    async def test_report_finding_update_fallback_is_scoped_to_reported_file(self, mcp_db: FiligreeDB) -> None:
+        finding_shape = {
+            "rule_id": "same-risk",
+            "message": "Identical finding text",
+            "severity": "medium",
+            "line_start": 7,
+        }
+        mcp_db.process_scan_results(
+            scan_source="agent",
+            findings=[{"path": "src/alpha.py", **finding_shape}],
+            create_observations=True,
+        )
+        mcp_db.process_scan_results(
+            scan_source="agent",
+            findings=[{"path": "src/beta.py", **finding_shape}],
+            create_observations=True,
+        )
+        alpha_file = mcp_db.get_file_by_path("src/alpha.py")
+        beta_file = mcp_db.get_file_by_path("src/beta.py")
+        assert alpha_file is not None
+        assert beta_file is not None
+        alpha_finding = mcp_db.list_findings_global(file_id=alpha_file.id, scan_source="agent")["findings"][0]
+        beta_finding = mcp_db.list_findings_global(file_id=beta_file.id, scan_source="agent")["findings"][0]
+        beta_observation = mcp_db.list_observations(file_id=beta_file.id)[0]
+        mcp_db.conn.execute(
+            "UPDATE scan_findings SET updated_at = ? WHERE id = ?",
+            ("2999-01-01T00:00:00+00:00", alpha_finding["id"]),
+        )
+        mcp_db.conn.commit()
+
+        data = _parse(
+            await call_tool(
+                "report_finding",
+                {
+                    "file_path": "src/beta.py",
+                    "create_observation": True,
+                    **finding_shape,
+                },
+            )
+        )
+
+        assert data["finding_result"] == "updated"
+        assert data["file_id"] == beta_file.id
+        assert data["finding_id"] == beta_finding["id"]
+        assert data["observation_id"] == beta_observation["id"]
 
 
 class TestUpdateFindingTool:

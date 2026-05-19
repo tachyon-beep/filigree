@@ -29,6 +29,7 @@ from click.testing import CliRunner
 from filigree.cli import cli
 from filigree.cli_common import get_db
 from filigree.core import FiligreeDB, write_config
+from filigree.registry import RegistryUnavailableError
 from tests._seeds import SeededProject
 
 # ---------------------------------------------------------------------------
@@ -576,6 +577,20 @@ class TestPreviewScanCommand:
         finally:
             os.chdir(original)
 
+    def test_preview_scan_invalid_project_mode_returns_validation(self, project_with_scanner: SeededProject) -> None:
+        write_config(project_with_scanner.path / ".filigree", {"prefix": "test", "version": 1, "mode": "bogus"})
+        runner = CliRunner()
+        original = os.getcwd()
+        os.chdir(str(project_with_scanner.path))
+        try:
+            result = runner.invoke(cli, ["preview-scan", "test-scanner", "target.py", "--json"])
+            assert result.exit_code == 1
+            data = json.loads(result.output)
+            assert data["code"] == "VALIDATION"
+            assert "Unknown mode" in data["error"]
+        finally:
+            os.chdir(original)
+
     def test_preview_scan_uses_server_config_port_in_server_mode(
         self,
         project_with_scanner: SeededProject,
@@ -798,6 +813,60 @@ class TestReportFindingCommand:
         finally:
             os.chdir(original)
 
+    def test_report_finding_does_not_register_file_after_ingest(
+        self,
+        initialized_project: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """process_scan_results owns file creation; report-finding must not duplicate it."""
+        original_register_file = FiligreeDB.register_file
+
+        def fail_register_file(self: FiligreeDB, *args: object, **kwargs: object) -> object:
+            raise AssertionError("report-finding called register_file after ingest")
+
+        runner = CliRunner()
+        original = os.getcwd()
+        os.chdir(str(initialized_project))
+        try:
+            monkeypatch.setattr(FiligreeDB, "register_file", fail_register_file)
+            result = runner.invoke(cli, ["report-finding", "--json"], input=_REPORT_FINDING_JSON)
+            assert result.exit_code == 0, result.output
+            data = json.loads(result.output)
+            assert data["status"] == "created"
+            assert "finding_id" in data
+        finally:
+            monkeypatch.setattr(FiligreeDB, "register_file", original_register_file)
+            os.chdir(original)
+
+    def test_report_finding_registry_unavailable_returns_structured_code(
+        self,
+        initialized_project: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        def unavailable_registry(self: FiligreeDB, **kwargs: object) -> object:
+            raise RegistryUnavailableError(
+                "Clarion registry unavailable for test",
+                url="http://clarion.test/api/v1/files?path=src%2Ffoo.py",
+                path="src/foo.py",
+                cause_kind="network",
+            )
+
+        runner = CliRunner()
+        original = os.getcwd()
+        os.chdir(str(initialized_project))
+        try:
+            monkeypatch.setattr(FiligreeDB, "process_scan_results", unavailable_registry)
+            result = runner.invoke(cli, ["report-finding", "--json"], input=_REPORT_FINDING_JSON)
+            assert result.exit_code == 1
+            data = json.loads(result.output)
+            assert data["code"] == "REGISTRY_UNAVAILABLE"
+            assert data["details"]["cause"] == "registry_unavailable"
+            assert data["details"]["cause_kind"] == "network"
+            assert data["details"]["path"] == "src/foo.py"
+            assert data["details"]["url"] == "http://clarion.test/api/v1/files?path=src%2Ffoo.py"
+        finally:
+            os.chdir(original)
+
     def test_report_finding_file_option(self, initialized_project: Path) -> None:
         runner = CliRunner()
         original = os.getcwd()
@@ -936,6 +1005,64 @@ class TestReportFindingCommand:
 
 
 class TestTriggerScanCommand:
+    def test_trigger_scan_registry_unavailable_returns_structured_code(
+        self,
+        project_with_scanner: SeededProject,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        def unavailable_register_file(self: FiligreeDB, path: str, **kwargs: object) -> object:
+            raise RegistryUnavailableError(
+                "Clarion registry unavailable for test",
+                url="http://clarion.test/api/v1/files?path=target.py",
+                path=path,
+                cause_kind="network",
+            )
+
+        runner = CliRunner()
+        original = os.getcwd()
+        os.chdir(str(project_with_scanner.path))
+        try:
+            monkeypatch.setattr(FiligreeDB, "register_file", unavailable_register_file)
+            result = runner.invoke(cli, ["trigger-scan", "test-scanner", "target.py", "--json"])
+            assert result.exit_code == 1
+            data = json.loads(result.output)
+            assert data["code"] == "REGISTRY_UNAVAILABLE"
+            assert data["details"]["cause"] == "registry_unavailable"
+            assert data["details"]["cause_kind"] == "network"
+            assert data["details"]["path"] == "target.py"
+            assert data["details"]["url"] == "http://clarion.test/api/v1/files?path=target.py"
+        finally:
+            os.chdir(original)
+
+    def test_trigger_scan_batch_registry_unavailable_returns_structured_code(
+        self,
+        project_with_scanner: SeededProject,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        def unavailable_register_file(self: FiligreeDB, path: str, **kwargs: object) -> object:
+            raise RegistryUnavailableError(
+                "Clarion registry unavailable for test",
+                url="http://clarion.test/api/v1/files?path=target.py",
+                path=path,
+                cause_kind="network",
+            )
+
+        runner = CliRunner()
+        original = os.getcwd()
+        os.chdir(str(project_with_scanner.path))
+        try:
+            monkeypatch.setattr(FiligreeDB, "register_file", unavailable_register_file)
+            result = runner.invoke(cli, ["trigger-scan-batch", "test-scanner", "target.py", "--json"])
+            assert result.exit_code == 1
+            data = json.loads(result.output)
+            assert data["code"] == "REGISTRY_UNAVAILABLE"
+            assert data["details"]["cause"] == "registry_unavailable"
+            assert data["details"]["cause_kind"] == "network"
+            assert data["details"]["path"] == "target.py"
+            assert data["details"]["url"] == "http://clarion.test/api/v1/files?path=target.py"
+        finally:
+            os.chdir(original)
+
     def test_trigger_scan_success(self, project_with_scanner: SeededProject) -> None:
         runner = CliRunner()
         original = os.getcwd()
@@ -986,12 +1113,15 @@ class TestTriggerScanCommand:
             with patch("filigree.scanner_runtime.subprocess.Popen", return_value=_FakeProc(12345)) as popen:
                 result = runner.invoke(
                     cli,
-                    ["trigger-scan", "test-scanner", "target.py", "--api-url", "http://localhost:9999", "--json"],
+                    ["trigger-scan", "test-scanner", "target.py", "--api-url", "http://localhost:9999///", "--json"],
                 )
             assert result.exit_code == 0, result.output
             assert "http://localhost:9999" in popen.call_args.args[0]
+            assert "http://localhost:9999///" not in popen.call_args.args[0]
             assert "http://localhost:9229" not in popen.call_args.args[0]
-            assert json.loads(result.output)["api_url_source"] == "explicit"
+            data = json.loads(result.output)
+            assert data["api_url"] == "http://localhost:9999"
+            assert data["api_url_source"] == "explicit"
         finally:
             os.chdir(original)
 

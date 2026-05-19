@@ -10,16 +10,18 @@ tests/api/test_api.py are intentionally NOT duplicated here.
 from __future__ import annotations
 
 import json
+import logging
 import time
 from collections.abc import AsyncIterator
 from pathlib import Path
+from typing import Any
 from unittest.mock import patch
 
 import pytest
 from httpx import ASGITransport, AsyncClient
 
 import filigree.dashboard as dash_module
-from filigree.core import CONF_FILENAME, DB_FILENAME, FILIGREE_DIR_NAME, FiligreeDB, write_conf, write_config
+from filigree.core import CONF_FILENAME, DB_FILENAME, FILIGREE_DIR_NAME, FiligreeDB, ForeignDatabaseError, write_conf, write_config
 from filigree.dashboard import (
     IDLE_TIMEOUT_SECONDS,
     ProjectStore,
@@ -369,6 +371,98 @@ class TestMainGlobalReset:
         assert ".filigree.conf" in stderr
         assert "Run `filigree doctor`" in stderr
         assert "Traceback" not in stderr
+
+    def test_ethereal_main_enables_local_registry_fallback_without_startup_downgrade(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        filigree_dir = tmp_path / FILIGREE_DIR_NAME
+        filigree_dir.mkdir()
+        write_config(
+            filigree_dir,
+            {
+                "prefix": "dash",
+                "version": 1,
+                "registry_backend": "clarion",
+                "clarion": {"base_url": "http://clarion.test"},
+            },
+        )
+        write_conf(
+            tmp_path / CONF_FILENAME,
+            {
+                "version": 1,
+                "project_name": "dash",
+                "prefix": "dash",
+                "db": ".filigree/filigree.db",
+                "registry_backend": "clarion",
+                "clarion": {"base_url": "http://clarion.test"},
+            },
+        )
+        db = FiligreeDB(filigree_dir / DB_FILENAME, prefix="dash")
+        db.initialize()
+        db.close()
+        monkeypatch.chdir(tmp_path)
+        captured: dict[str, Any] = {}
+
+        def fake_run(*args: object, **kwargs: object) -> None:
+            captured["config"] = dict(dash_module._config)
+            captured["clarion_config"] = dict(dash_module._db.clarion_config) if dash_module._db is not None else {}
+            captured["allow_local_fallback"] = dash_module._db.allow_local_fallback if dash_module._db is not None else False
+            captured["registry_displaced"] = dash_module._db.registry.is_displaced() if dash_module._db is not None else False
+
+        monkeypatch.setattr("uvicorn.run", fake_run)
+
+        with caplog.at_level(logging.WARNING, logger="filigree.dashboard"):
+            dash_module.main(port=9999, no_browser=True, server_mode=False, allow_local_fallback=True)
+
+        assert "dashboard started with --allow-local-fallback; clarion registry is bypassed for auto-creates" in caplog.text
+        # The post-startup *write-path* WARN (``_ClarionLocalFallbackRegistry``
+        # logs this on every resolve_file fall-through) is still absent —
+        # only the startup-time probe-failure WARN is in caplog.
+        assert "Clarion registry backend unavailable; using local file registry fallback" not in caplog.text
+        assert captured["allow_local_fallback"] is True
+        assert captured["registry_displaced"] is True
+        assert captured["config"]["clarion"] == {"base_url": "http://clarion.test"}
+        # ADR-014: ``--allow-local-fallback`` overrides whatever the project
+        # config says about fallback *before* the capability probe runs, so
+        # the resulting in-memory ``clarion_config`` carries
+        # ``allow_local_fallback: True``.
+        assert captured["clarion_config"] == {"base_url": "http://clarion.test", "allow_local_fallback": True}
+
+    def test_dashboard_structured_log_does_not_leak_paths(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Structured startup logs use safe wording; stderr keeps the rich diagnostic."""
+        cwd = tmp_path / "inner"
+        cwd.mkdir()
+        found_anchor = tmp_path / CONF_FILENAME
+        write_conf(found_anchor, {"version": 1, "project_name": "outer", "prefix": "outer", "db": ".filigree/filigree.db"})
+        exc = ForeignDatabaseError(cwd=cwd, found_anchor=found_anchor, git_boundary=cwd)
+
+        def raise_foreign_database_error() -> None:
+            raise exc
+
+        monkeypatch.setattr(dash_module, "find_filigree_anchor", raise_foreign_database_error)
+        monkeypatch.setattr("uvicorn.run", lambda *a, **kw: pytest.fail("uvicorn should not start"))
+
+        with caplog.at_level(logging.WARNING, logger="filigree.dashboard"), pytest.raises(SystemExit) as excinfo:
+            dash_module.main(port=9999, no_browser=True, server_mode=False)
+
+        assert excinfo.value.code == 1
+        stderr = capsys.readouterr().err
+        assert str(cwd) in stderr
+        records = [record for record in caplog.records if record.message == "dashboard_project_config_error"]
+        assert records
+        logged_error = records[-1].args_data["error"]
+        assert str(cwd) not in logged_error
+        assert str(found_anchor) not in logged_error
+        assert "filigree init" not in logged_error
 
 
 class TestGetDbErrorPaths:

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import pytest
 from httpx import AsyncClient
 
+from filigree.registry import RegistryFileNotFoundError, RegistryUnavailableError, ResolvedFile
 from tests.conftest import PopulatedDB
 
 
@@ -46,6 +48,91 @@ class TestFilesSchemaAPI:
     async def test_schema_has_cache_control(self, client: AsyncClient) -> None:
         resp = await client.get("/api/files/_schema")
         assert resp.headers.get("cache-control") == "max-age=3600"
+
+    async def test_schema_returns_registry_backend_config_flags(self, client: AsyncClient) -> None:
+        resp = await client.get("/api/files/_schema")
+        data = resp.json()
+
+        assert data["config_flags"] == {
+            "registry_backend": "local",
+            "registry_backend_features": ["local", "clarion"],
+            "allow_local_fallback": False,
+            # F-1: probe identity is unset under local-mode; the keys are still
+            # emitted so the dashboard JS does not need a separate code path.
+            "clarion_instance_id": None,
+            "clarion_api_version": None,
+            "clarion_instance_rotated": False,
+        }
+
+    async def test_schema_config_flags_reflect_project_backend(self, clarion_fallback_client: AsyncClient) -> None:
+        resp = await clarion_fallback_client.get("/api/files/_schema")
+        data = resp.json()
+
+        assert data["config_flags"]["registry_backend"] == "clarion"
+        assert data["config_flags"]["registry_backend_features"] == ["local", "clarion"]
+        assert data["config_flags"]["allow_local_fallback"] is True
+
+
+class TestScanResultsRegistryErrors:
+    async def test_scan_results_returns_not_found_for_unknown_clarion_file(
+        self,
+        client: AsyncClient,
+        dashboard_db: PopulatedDB,
+    ) -> None:
+        class MissingFileRegistry:
+            def resolve_file(self, path: str, *, language: str = "", actor: str = "") -> ResolvedFile:
+                raise RegistryFileNotFoundError(
+                    "Clarion registry could not resolve file at http://clarion.test/api/v1/files?path=missing.py: HTTP 404 not indexed",
+                    status_code=404,
+                    url="http://clarion.test/api/v1/files?path=missing.py",
+                )
+
+            def is_displaced(self) -> bool:
+                return True
+
+        dashboard_db.db.registry = MissingFileRegistry()
+
+        resp = await client.post(
+            "/api/v1/scan-results",
+            json={
+                "scan_source": "codex",
+                "findings": [{"path": "missing.py", "rule_id": "R1", "severity": "low", "message": "m"}],
+            },
+        )
+
+        assert resp.status_code == 404
+        body = resp.json()
+        assert body["code"] == "NOT_FOUND"
+        assert "HTTP 404 not indexed" in body["error"]
+
+    @pytest.mark.parametrize("path", ["/api/v1/scan-results", "/api/loom/scan-results", "/api/scan-results"])
+    async def test_scan_results_returns_registry_unavailable_code(
+        self,
+        client: AsyncClient,
+        dashboard_db: PopulatedDB,
+        path: str,
+    ) -> None:
+        class UnavailableRegistry:
+            def resolve_file(self, path: str, *, language: str = "", actor: str = "") -> ResolvedFile:
+                raise RegistryUnavailableError("Clarion registry unavailable for test")
+
+            def is_displaced(self) -> bool:
+                return True
+
+        dashboard_db.db.registry = UnavailableRegistry()
+
+        resp = await client.post(
+            path,
+            json={
+                "scan_source": "codex",
+                "findings": [{"path": "missing.py", "rule_id": "R1", "severity": "low", "message": "m"}],
+            },
+        )
+
+        assert resp.status_code == 503
+        body = resp.json()
+        assert body["code"] == "REGISTRY_UNAVAILABLE"
+        assert body["code"] != "IO"
 
 
 class TestScanRunsAPI:

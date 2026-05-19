@@ -14,10 +14,11 @@ from mcp.types import TextContent
 
 from filigree.issue_payloads import issue_to_ready, issue_to_slim
 from filigree.models import Issue
+from filigree.registry_errors import RegistryPublicError, registry_error_response
 
 if TYPE_CHECKING:
     from filigree.core import FiligreeDB
-from filigree.types.api import ErrorCode, ErrorResponse, ListResponse, ReadyIssue, SlimIssue, TransitionError
+from filigree.types.api import ErrorCode, ErrorResponse, ListResponse, ReadyIssue, SlimIssue, TransitionError, TransitionHint
 from filigree.validation import sanitize_actor
 
 logger = logging.getLogger(__name__)
@@ -46,6 +47,10 @@ def _text(content: object) -> list[TextContent]:
     if isinstance(content, str):
         return [TextContent(type="text", text=content)]
     return [TextContent(type="text", text=json.dumps(content, indent=2, default=str))]
+
+
+def _registry_error_text(exc: RegistryPublicError, *, action: str) -> list[TextContent]:
+    return _text(registry_error_response(exc, action=action))
 
 
 def _slim_issue(issue: Issue) -> SlimIssue:
@@ -151,12 +156,20 @@ def _validate_actor(value: Any) -> tuple[str, list[TextContent] | None]:
     return (cleaned, None)
 
 
+def _log_transition_enrichment_failure(issue_id: str, exc: Exception) -> None:
+    if isinstance(exc, KeyError):
+        logger.debug("Issue %s disappeared while enriching invalid-transition response", issue_id, exc_info=True)
+        return
+    logger.warning("Failed to enrich invalid-transition response for %s", issue_id, exc_info=True)
+
+
 def _build_transition_error(
     tracker: FiligreeDB,
     issue_id: str,
     error: str,
     *,
     include_ready: bool = True,
+    valid_transitions: list[TransitionHint] | None = None,
 ) -> TransitionError:
     """Build a structured error dict with valid-transition hints.
 
@@ -166,6 +179,18 @@ def _build_transition_error(
     filigree-55c5347992).
     """
     data: TransitionError = {"error": error, "code": ErrorCode.INVALID_TRANSITION}
+    if valid_transitions is not None:
+        data["valid_transitions"] = valid_transitions
+        try:
+            if not valid_transitions and tracker.get_issue(issue_id).status_category == "done":
+                data["reopen_available"] = True
+                data["hint"] = "Use reopen_issue to return this closed issue to the last non-done status before closure"
+            else:
+                data["hint"] = "Use get_valid_transitions to see allowed state changes"
+        except Exception as exc:
+            data["hint"] = "Use get_valid_transitions to see allowed state changes"
+            _log_transition_enrichment_failure(issue_id, exc)
+        return data
     try:
         transitions = tracker.get_valid_transitions(issue_id)
         if include_ready:
@@ -177,7 +202,7 @@ def _build_transition_error(
             data["hint"] = "Use reopen_issue to return this closed issue to the last non-done status before closure"
         else:
             data["hint"] = "Use get_valid_transitions to see allowed state changes"
-    except Exception:
+    except Exception as exc:
         # Enrichment is best-effort — must never mask the original error.
-        logger.debug("Could not resolve transitions for %s", issue_id, exc_info=True)
+        _log_transition_enrichment_failure(issue_id, exc)
     return data

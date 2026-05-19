@@ -54,6 +54,7 @@ def _alive_clause(sweep: bool, now_iso: str) -> tuple[str, str, tuple[str, ...]]
 
 
 DISMISSED_AUDIT_TRAIL_CAP = 10_000
+OBSERVATION_SWEEP_FAILURE_ALERT_THRESHOLD = 3
 
 
 def _expires_iso(ttl_days: int = DEFAULT_TTL_DAYS) -> str:
@@ -119,6 +120,21 @@ class ObservationsMixin(DBMixinProtocol):
     time via MRO.
     """
 
+    def _record_observation_sweep_success(self, timestamp: str) -> None:
+        self._observation_sweep_consecutive_failures = 0
+        self._observation_sweep_last_success_at = timestamp
+
+    def _record_observation_sweep_failure(self) -> int:
+        failures = int(getattr(self, "_observation_sweep_consecutive_failures", 0)) + 1
+        self._observation_sweep_consecutive_failures = failures
+        return failures
+
+    def _observation_sweep_health(self) -> dict[str, Any]:
+        return {
+            "sweep_consecutive_failures": int(getattr(self, "_observation_sweep_consecutive_failures", 0)),
+            "last_successful_sweep_at": getattr(self, "_observation_sweep_last_success_at", None),
+        }
+
     def _sweep_expired_observations(self) -> tuple[int, bool]:
         """Delete expired observations in a savepoint (piggyback cleanup).
 
@@ -151,13 +167,27 @@ class ObservationsMixin(DBMixinProtocol):
                 (DISMISSED_AUDIT_TRAIL_CAP,),
             )
             self.conn.execute("RELEASE SAVEPOINT sweep_obs")
+            self._record_observation_sweep_success(now)
             if cursor.rowcount > 0:
                 logger.debug("Swept %d expired observations", cursor.rowcount)
             return cursor.rowcount, True
-        except (sqlite3.OperationalError, sqlite3.IntegrityError):
-            # Suppress transient errors (locked, busy) and integrity violations — sweep is best-effort.
-            # Let ProgrammingError, InterfaceError propagate — those indicate code bugs.
-            logger.warning("Observation sweep failed, rolled back", exc_info=True)
+        except sqlite3.IntegrityError:
+            logger.error("Observation sweep hit an integrity violation, rolled back", exc_info=True)
+            try:
+                self.conn.execute("ROLLBACK TO SAVEPOINT sweep_obs")
+            finally:
+                try:
+                    self.conn.execute("RELEASE SAVEPOINT sweep_obs")
+                except sqlite3.Error:
+                    logger.warning("Failed to release savepoint after sweep rollback", exc_info=True)
+            raise
+        except sqlite3.OperationalError:
+            # Suppress transient errors (locked, busy) — sweep is best-effort.
+            # Let ProgrammingError and InterfaceError propagate; those indicate code bugs.
+            failures = self._record_observation_sweep_failure()
+            logger.warning("Observation sweep failed, rolled back", extra={"consecutive_failures": failures}, exc_info=True)
+            if failures >= OBSERVATION_SWEEP_FAILURE_ALERT_THRESHOLD:
+                logger.error("Observation sweep has failed %d consecutive times", failures)
             try:
                 self.conn.execute("ROLLBACK TO SAVEPOINT sweep_obs")
             finally:
@@ -511,8 +541,16 @@ class ObservationsMixin(DBMixinProtocol):
         # opted out of sweeping — in both cases expired rows may still exist.
         alive_frag, alive_where, alive_params = _alive_clause(sweep and swept_ok, now_iso)
         count = self.conn.execute(f"SELECT COUNT(*) FROM observations{alive_where}", alive_params).fetchone()[0]
+        sweep_health = self._observation_sweep_health()
         if count == 0:
-            return {"count": 0, "stale_count": 0, "oldest_hours": 0, "expiring_soon_count": 0}
+            return {
+                "count": 0,
+                "stale_count": 0,
+                "oldest_hours": 0,
+                "expiring_soon_count": 0,
+                "sweep_consecutive_failures": cast(int, sweep_health["sweep_consecutive_failures"]),
+                "last_successful_sweep_at": cast(ISOTimestamp | None, sweep_health["last_successful_sweep_at"]),
+            }
 
         stale_cutoff = (now - timedelta(hours=STALE_THRESHOLD_HOURS)).isoformat()
         expiring_cutoff = (now + timedelta(hours=24)).isoformat()
@@ -542,6 +580,8 @@ class ObservationsMixin(DBMixinProtocol):
             "stale_count": stale,
             "oldest_hours": round(oldest_hours, 1) if oldest_hours is not None else None,
             "expiring_soon_count": expiring,
+            "sweep_consecutive_failures": cast(int, sweep_health["sweep_consecutive_failures"]),
+            "last_successful_sweep_at": cast(ISOTimestamp | None, sweep_health["last_successful_sweep_at"]),
         }
 
     def dismiss_observation(
@@ -921,11 +961,15 @@ class ObservationsMixin(DBMixinProtocol):
             # 3. Create issue first — if this fails, observation is untouched.
             #    The source_observation_id field is the durable idempotency key:
             #    retries after a cleanup failure see the existing issue and return
-            #    it instead of creating a duplicate.  ``create_issue`` commits
-            #    internally, which closes the BEGIN IMMEDIATE transaction; that's
-            #    fine — the writer lock has been held continuously from BEGIN
-            #    through the INSERT, so any peer waiting on BEGIN IMMEDIATE will
-            #    see this issue's row when their idempotency check runs.
+            #    it instead of creating a duplicate.
+            #
+            #    Under 2.1.0 §2.1, ``create_issue`` is wrapped in
+            #    ``@_in_immediate_tx``; pass ``_skip_begin=True`` so it runs
+            #    inside the outer IMMEDIATE we just opened. Then commit
+            #    explicitly to release the writer lock before the observation
+            #    cleanup runs in its own transaction — preserves the prior
+            #    invariant that a DELETE failure must not roll back the
+            #    committed issue.
             issue = self.create_issue(
                 issue_title,
                 type=issue_type,
@@ -933,7 +977,9 @@ class ObservationsMixin(DBMixinProtocol):
                 description=description,
                 actor=actor or obs["actor"],
                 fields={"source_observation_id": obs_id},
+                _skip_begin=True,
             )
+            self.conn.commit()
         except Exception:
             if self.conn.in_transaction:
                 self.conn.rollback()

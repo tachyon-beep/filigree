@@ -11,8 +11,8 @@ import json
 import sqlite3
 from datetime import UTC, datetime, timedelta
 
-from filigree.db_base import DBMixinProtocol, _now_iso
-from filigree.types.events import EventRecord, EventRecordWithTitle, EventType, UndoResult
+from filigree.db_base import DBMixinProtocol, _in_immediate_tx, _now_iso, _retry_busy
+from filigree.types.events import REVERSIBLE_EVENT_TYPES, EventRecord, EventRecordWithTitle, EventType, UndoResult
 
 _UNDO_CLAIM_LEASE_HOURS = 48
 
@@ -25,21 +25,7 @@ def _undo_claim_expiry(now: str) -> str:
 # Undo constants (moved from core.py — only used by undo_last)
 # ---------------------------------------------------------------------------
 
-_REVERSIBLE_EVENTS = frozenset(
-    {
-        "status_changed",
-        "title_changed",
-        "priority_changed",
-        "assignee_changed",
-        "claimed",
-        "dependency_added",
-        "dependency_removed",
-        "description_changed",
-        "notes_changed",
-        "fields_changed",
-        "parent_changed",
-    }
-)
+_REVERSIBLE_EVENTS = frozenset(REVERSIBLE_EVENT_TYPES)
 
 
 class EventsMixin(DBMixinProtocol):
@@ -93,10 +79,26 @@ class EventsMixin(DBMixinProtocol):
         new_value: str | None = None,
         comment: str = "",
     ) -> None:
+        """Append an audit event inside the caller-owned transaction.
+
+        Public write paths normally reach this through ``@_in_immediate_tx``,
+        which holds SQLite's single-writer lock until the surrounding mutation
+        commits or rolls back. Direct callers outside that decorator must own
+        equivalent transaction serialization before depending on the per-issue
+        ``event_seq`` monotonicity guarantee. This helper never commits.
+        """
+        # 2.1.0 §0.2: plain INSERT (not INSERT OR IGNORE) so unexpected
+        # same-key collisions bubble up to the caller's transaction for rollback.
+        # ``event_seq`` is computed inline as the next per-issue monotonic
+        # value via COALESCE+MAX subquery. The caller-held writer transaction
+        # serializes concurrent writers while avoiding in-memory counters, so
+        # this survives crashes and stays atomic with the issue mutation.
+        # Ensure same-second emissions get distinct sequence numbers; heartbeat
+        # bursts and batch ops sharing _now_iso() persist as separate audit rows.
         self.conn.execute(
-            "INSERT OR IGNORE INTO events (issue_id, event_type, actor, old_value, new_value, comment, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (issue_id, event_type, actor, old_value, new_value, comment, _now_iso()),
+            "INSERT INTO events (issue_id, event_type, actor, old_value, new_value, comment, created_at, event_seq) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, COALESCE((SELECT MAX(event_seq) FROM events WHERE issue_id = ?), -1) + 1)",
+            (issue_id, event_type, actor, old_value, new_value, comment, _now_iso(), issue_id),
         )
 
     def get_recent_events(self, limit: int = 20) -> list[EventRecordWithTitle]:
@@ -439,6 +441,8 @@ class EventsMixin(DBMixinProtocol):
 
     # -- Archival / Compaction ------------------------------------------------
 
+    @_retry_busy()
+    @_in_immediate_tx("archive_closed")
     def archive_closed(self, *, days_old: int = 30, actor: str = "", label: str | None = None) -> list[str]:
         """Archive done-category issues older than `days_old` days.
 
@@ -484,20 +488,16 @@ class EventsMixin(DBMixinProtocol):
             return []
 
         now = _now_iso()
-        try:
-            for issue_id in archived_ids:
-                self.conn.execute(
-                    "UPDATE issues SET status = 'archived', updated_at = ? WHERE id = ?",
-                    (now, issue_id),
-                )
-                self._record_event(issue_id, "archived", actor=actor)
-
-            self.conn.commit()
-        except Exception:
-            self.conn.rollback()
-            raise
+        for issue_id in archived_ids:
+            self.conn.execute(
+                "UPDATE issues SET status = 'archived', updated_at = ? WHERE id = ?",
+                (now, issue_id),
+            )
+            self._record_event(issue_id, "archived", actor=actor)
         return archived_ids
 
+    @_retry_busy()
+    @_in_immediate_tx("compact_events")
     def compact_events(self, *, keep_recent: int = 50, actor: str = "") -> int:
         """Remove old events for archived issues, keeping only the most recent ones.
 
@@ -511,26 +511,18 @@ class EventsMixin(DBMixinProtocol):
             return 0
 
         total_deleted = 0
-        try:
-            for row in archived:
-                issue_id = row["id"]
-                event_count = self.conn.execute("SELECT COUNT(*) as cnt FROM events WHERE issue_id = ?", (issue_id,)).fetchone()["cnt"]
+        for row in archived:
+            issue_id = row["id"]
+            event_count = self.conn.execute("SELECT COUNT(*) as cnt FROM events WHERE issue_id = ?", (issue_id,)).fetchone()["cnt"]
 
-                if event_count <= keep_recent:
-                    continue
+            if event_count <= keep_recent:
+                continue
 
-                cursor = self.conn.execute(
-                    "DELETE FROM events WHERE id IN (SELECT id FROM events WHERE issue_id = ? ORDER BY created_at ASC, id ASC LIMIT ?)",
-                    (issue_id, event_count - keep_recent),
-                )
-                total_deleted += cursor.rowcount
-
-            if total_deleted > 0:
-                self.conn.commit()
-        except Exception:
-            self.conn.rollback()
-            raise
-
+            cursor = self.conn.execute(
+                "DELETE FROM events WHERE id IN (SELECT id FROM events WHERE issue_id = ? ORDER BY created_at ASC, id ASC LIMIT ?)",
+                (issue_id, event_count - keep_recent),
+            )
+            total_deleted += cursor.rowcount
         return total_deleted
 
     def vacuum(self) -> None:

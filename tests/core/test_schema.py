@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import sqlite3
 from pathlib import Path
 
@@ -78,6 +79,52 @@ class TestSchemaV1Constant:
     def test_v1_excludes_file_tables(self) -> None:
         for table in ("file_records", "scan_findings", "file_associations", "file_events"):
             assert table not in SCHEMA_V1_SQL
+
+
+class TestFileRegistryBackendSchema:
+    """Verify the ADR-014 file registry columns land additively."""
+
+    def test_fresh_schema_contains_file_registry_backend_columns(self, tmp_path: Path) -> None:
+        conn = _make_db(tmp_path)
+        conn.executescript(SCHEMA_SQL)
+
+        columns = _get_table_columns(conn, "file_records")
+
+        assert columns["content_hash"] == "TEXT"
+        assert columns["registry_backend"] == "TEXT"
+        conn.close()
+
+    def test_migration_v16_to_v17_adds_file_registry_backend_columns(self, tmp_path: Path) -> None:
+        conn = _make_db(tmp_path)
+        conn.executescript(SCHEMA_SQL)
+        conn.execute("PRAGMA user_version = 16")
+        existing_columns = _get_table_columns(conn, "file_records")
+        if "content_hash" in existing_columns:
+            conn.execute("ALTER TABLE file_records DROP COLUMN content_hash")
+        if "registry_backend" in existing_columns:
+            conn.execute("ALTER TABLE file_records DROP COLUMN registry_backend")
+        conn.execute(
+            "INSERT INTO file_records (id, path, first_seen, updated_at) VALUES (?, ?, ?, ?)",
+            ("existing-f-1", "src/existing.py", "2026-05-18T00:00:00+00:00", "2026-05-18T00:00:00+00:00"),
+        )
+        conn.commit()
+
+        apply_pending_migrations(conn, 17)
+
+        columns = _get_table_columns(conn, "file_records")
+        assert columns["content_hash"] == "TEXT"
+        assert columns["registry_backend"] == "TEXT"
+        existing_row = conn.execute(
+            "SELECT content_hash, registry_backend FROM file_records WHERE id = ?",
+            ("existing-f-1",),
+        ).fetchone()
+        assert dict(existing_row) == {"content_hash": "", "registry_backend": "local"}
+        row = conn.execute(
+            "INSERT INTO file_records (id, path, first_seen, updated_at) VALUES (?, ?, ?, ?) RETURNING content_hash, registry_backend",
+            ("f-1", "src/a.py", "2026-05-19T00:00:00+00:00", "2026-05-19T00:00:00+00:00"),
+        ).fetchone()
+        assert dict(row) == {"content_hash": "", "registry_backend": "local"}
+        conn.close()
 
 
 class TestClaimLeaseSchema:
@@ -211,6 +258,141 @@ class TestEntityAssociationsSchema:
         assert "clarion_entity_id" in columns
         assert "content_hash_at_attach" in columns
         conn.close()
+
+    def test_migration_v15_to_v16_adds_event_seq_and_rebuilds_index(self, tmp_path: Path) -> None:
+        """v15→v16 (2.1.0 §0.2): event_seq column added with DEFAULT 0;
+        the dedup UNIQUE index is rebuilt to include the new column so
+        same-second emissions stop silently colliding. Historical event
+        rows survive the migration with event_seq=0 — replaying the
+        pre-v16 silent-collision behaviour on the backfill is acceptable
+        because those events were already being dropped under the old
+        INSERT OR IGNORE."""
+        conn = _make_db(tmp_path)
+        conn.executescript(SCHEMA_SQL)
+        # Roll the schema back to v15 shape: drop event_seq + restore the
+        # pre-v16 dedup index.
+        conn.execute("PRAGMA user_version = 15")
+        conn.execute("DROP INDEX IF EXISTS idx_events_dedup")
+        # SQLite can't drop columns directly without rebuild; for the
+        # migration regression we just rely on add_column being
+        # idempotent and the rebuilt index being the observable change.
+        # First confirm the v16 column is *present* (because executescript
+        # ran SCHEMA_SQL above), then exercise the dedup-index rebuild.
+        assert "event_seq" in _get_table_columns(conn, "events")
+        # Seed one historical event row with event_seq=0 to mimic a
+        # backfilled pre-v16 record.
+        ts = "2026-01-01T00:00:00+00:00"
+        conn.execute(
+            "INSERT INTO issues (id, title, status, type, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+            ("test-fffeeedd00", "t", "open", "task", ts, ts),
+        )
+        conn.execute(
+            "INSERT INTO events (issue_id, event_type, actor, created_at, event_seq) VALUES (?, ?, ?, ?, ?)",
+            ("test-fffeeedd00", "created", "", ts, 0),
+        )
+        conn.commit()
+
+        apply_pending_migrations(conn, CURRENT_SCHEMA_VERSION)
+
+        # event_seq still there; historical row preserved.
+        assert "event_seq" in _get_table_columns(conn, "events")
+        rows = conn.execute("SELECT event_seq FROM events WHERE issue_id = 'test-fffeeedd00'").fetchall()
+        assert len(rows) == 1
+        assert rows[0]["event_seq"] == 0
+        # Dedup index now includes event_seq — check the column count on
+        # the index covers the new tuple.
+        idx_info = conn.execute("PRAGMA index_info(idx_events_dedup)").fetchall()
+        # Composite is (issue_id, event_type, actor, coalesce(old), coalesce(new),
+        # created_at, event_seq) — 7 columns.
+        assert len(idx_info) == 7
+        conn.close()
+
+    def test_migration_v15_to_v16_adds_event_seq_to_true_v15_database(self, tmp_path: Path) -> None:
+        """The v15→v16 migration must exercise the ALTER TABLE path."""
+        conn = _make_db(tmp_path)
+        try:
+            conn.executescript(SCHEMA_V1_SQL)
+            conn.execute("PRAGMA user_version = 1")
+            conn.commit()
+
+            apply_pending_migrations(conn, 15)
+            assert _get_schema_version(conn) == 15
+            assert "event_seq" not in _get_table_columns(conn, "events")
+
+            apply_pending_migrations(conn, CURRENT_SCHEMA_VERSION)
+
+            assert _get_schema_version(conn) == CURRENT_SCHEMA_VERSION
+            assert "event_seq" in _get_table_columns(conn, "events")
+            event_seq_info = {row["name"]: row for row in conn.execute("PRAGMA table_info(events)").fetchall()}["event_seq"]
+            assert event_seq_info["type"] == "INTEGER"
+            assert event_seq_info["notnull"] == 1
+            assert event_seq_info["dflt_value"] == "0"
+        finally:
+            conn.close()
+
+    def test_migration_v15_to_v16_populated_events_rejects_null_event_seq(self, tmp_path: Path) -> None:
+        """Populated v15 events must migrate to the same NOT NULL shape as fresh DBs."""
+        conn = _make_db(tmp_path)
+        try:
+            conn.executescript(SCHEMA_V1_SQL)
+            conn.execute("PRAGMA user_version = 1")
+            conn.commit()
+
+            apply_pending_migrations(conn, 15)
+            assert _get_schema_version(conn) == 15
+            assert "event_seq" not in _get_table_columns(conn, "events")
+
+            ts = "2026-01-01T00:00:00+00:00"
+            conn.execute(
+                "INSERT INTO issues (id, title, created_at, updated_at) VALUES (?, ?, ?, ?)",
+                ("test-populated-v15", "populated migration", ts, ts),
+            )
+            conn.execute(
+                "INSERT INTO events (issue_id, event_type, actor, created_at) VALUES (?, ?, ?, ?)",
+                ("test-populated-v15", "created", "agent", ts),
+            )
+            conn.execute(
+                "INSERT INTO events (issue_id, event_type, actor, created_at) VALUES (?, ?, ?, ?)",
+                ("test-populated-v15", "heartbeat", "agent", ts),
+            )
+            conn.commit()
+
+            apply_pending_migrations(conn, CURRENT_SCHEMA_VERSION)
+
+            event_seq_info = {row["name"]: row for row in conn.execute("PRAGMA table_info(events)").fetchall()}["event_seq"]
+            assert event_seq_info["notnull"] == 1
+            rows = conn.execute(
+                "SELECT event_type, event_seq FROM events WHERE issue_id = ? ORDER BY id",
+                ("test-populated-v15",),
+            ).fetchall()
+            assert [(row["event_type"], row["event_seq"]) for row in rows] == [
+                ("created", 0),
+                ("heartbeat", 0),
+            ]
+
+            with pytest.raises(sqlite3.IntegrityError):
+                conn.execute(
+                    "INSERT INTO events (issue_id, event_type, actor, created_at, event_seq) VALUES (?, ?, ?, ?, ?)",
+                    ("test-populated-v15", "heartbeat", "agent", ts, None),
+                )
+
+            with pytest.raises(sqlite3.IntegrityError):
+                conn.execute(
+                    "INSERT INTO events (issue_id, event_type, actor, created_at, event_seq) VALUES (?, ?, ?, ?, ?)",
+                    ("test-populated-v15", "heartbeat", "agent", ts, 0),
+                )
+
+            conn.execute(
+                "INSERT INTO events (issue_id, event_type, actor, created_at, event_seq) VALUES (?, ?, ?, ?, ?)",
+                ("test-populated-v15", "heartbeat", "agent", ts, 1),
+            )
+            heartbeat_count = conn.execute(
+                "SELECT COUNT(*) FROM events WHERE issue_id = ? AND event_type = ?",
+                ("test-populated-v15", "heartbeat"),
+            ).fetchone()[0]
+            assert heartbeat_count == 2
+        finally:
+            conn.close()
 
 
 # ---------------------------------------------------------------------------
@@ -508,6 +690,61 @@ class TestMigrationRunnerFKPreservation:
 
             fk_after = conn.execute("PRAGMA foreign_keys").fetchone()[0]
             assert fk_after == 0  # must be restored to OFF
+        finally:
+            migrations.MIGRATIONS.clear()
+            migrations.MIGRATIONS.update(original)
+            conn.close()
+
+    def test_fk_restore_failure_is_reported(
+        self,
+        tmp_path: Path,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """If FK restoration fails after commit, the runner must surface it."""
+        conn = _make_db(tmp_path)
+        conn.execute("CREATE TABLE t (id INTEGER PRIMARY KEY)")
+        conn.execute("PRAGMA user_version = 1")
+        conn.commit()
+        conn.execute("PRAGMA foreign_keys=ON")
+        assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
+
+        class RestoreFailingConnection:
+            def __init__(self, inner: sqlite3.Connection) -> None:
+                self.inner = inner
+                self.restore_attempts = 0
+
+            @property
+            def in_transaction(self) -> bool:
+                return self.inner.in_transaction
+
+            def execute(self, sql: str, *args: object) -> sqlite3.Cursor:
+                if sql == "PRAGMA foreign_keys=ON":
+                    self.restore_attempts += 1
+                    raise sqlite3.OperationalError("restore failed")
+                return self.inner.execute(sql, *args)
+
+            def commit(self) -> None:
+                self.inner.commit()
+
+            def rollback(self) -> None:
+                self.inner.rollback()
+
+        from filigree import migrations
+
+        original = migrations.MIGRATIONS.copy()
+
+        def noop(c: sqlite3.Connection) -> None:
+            pass
+
+        migrations.MIGRATIONS[1] = noop  # type: ignore[assignment]
+        wrapped = RestoreFailingConnection(conn)
+        try:
+            with caplog.at_level(logging.ERROR, logger="filigree.migrations"), pytest.raises(MigrationError, match="restore failed"):
+                apply_pending_migrations(wrapped, 2)  # type: ignore[arg-type]
+
+            assert wrapped.restore_attempts == 1
+            assert _get_schema_version(conn) == 2
+            assert "foreign_key_restore_failed" in caplog.text
         finally:
             migrations.MIGRATIONS.clear()
             migrations.MIGRATIONS.update(original)

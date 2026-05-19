@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import builtins
 import json
+import logging
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from datetime import UTC, datetime, timedelta
@@ -343,6 +344,24 @@ class TestUpdateAndClose:
         assert data["code"] == ErrorCode.CONFLICT
         assert "assigned to 'agent-holder'" in data["error"]
         assert "expected 'other-agent'" in data["error"]
+        assert data["details"] == {"issue_id": issue.id, "observed": "agent-holder", "expected": "other-agent"}
+
+    async def test_update_issue_force_overwrite_corrupt_fields(self, mcp_db: FiligreeDB) -> None:
+        issue = mcp_db.create_issue("MCP corrupt fields")
+        mcp_db.conn.execute("UPDATE issues SET fields = ? WHERE id = ?", (b"\xff\xfe", issue.id))
+        mcp_db.conn.commit()
+
+        result = await call_tool(
+            "update_issue",
+            {
+                "issue_id": issue.id,
+                "fields": {"restored": True},
+                "force_overwrite_corrupt": True,
+            },
+        )
+
+        data = _parse(result)
+        assert data["fields"] == {"restored": True}
 
     async def test_update_issue_explicit_expected_assignee_overrides_actor_default(self, mcp_db: FiligreeDB) -> None:
         issue = mcp_db.create_issue("Claim-aware update")
@@ -382,6 +401,13 @@ class TestUpdateAndClose:
         result = await call_tool("close_issue", {"issue_id": issue.id, "reason": "done"})
         data = _parse(result)
         assert data["status"] == "closed"
+
+    async def test_close_invalid_transition_includes_valid_transitions(self, mcp_db: FiligreeDB) -> None:
+        issue = mcp_db.create_issue("Invalid close", type="bug")
+        result = await call_tool("close_issue", {"issue_id": issue.id, "reason": "cleanup"})
+        data = _parse(result)
+        assert data["code"] == ErrorCode.INVALID_TRANSITION
+        assert {t["to"] for t in data["valid_transitions"]} == {"confirmed", "wont_fix", "not_a_bug"}
 
     async def test_close_not_found(self, mcp_db: FiligreeDB) -> None:
         result = await call_tool("close_issue", {"issue_id": "mcp-nonexistent"})
@@ -555,6 +581,16 @@ class TestComments:
         assert data["status"] == "open"
         assert "comment_id" in data
 
+    async def test_add_comment_defaults_expected_assignee_to_actor_for_held_issue(self, mcp_db: FiligreeDB) -> None:
+        issue = mcp_db.create_issue("Claim-aware comment")
+        mcp_db.claim_issue(issue.id, assignee="agent-holder")
+
+        result = await call_tool("add_comment", {"issue_id": issue.id, "text": "note", "actor": "other-agent"})
+
+        data = _parse(result)
+        assert data["code"] == ErrorCode.CONFLICT
+        assert data["details"] == {"issue_id": issue.id, "observed": "agent-holder", "expected": "other-agent"}
+
     async def test_get_comments(self, mcp_db: FiligreeDB) -> None:
         issue = mcp_db.create_issue("With comments")
         mcp_db.add_comment(issue.id, "First", author="alice")
@@ -654,6 +690,18 @@ class TestLabels:
         assert data["code"] == ErrorCode.CONFLICT
         assert "assigned to 'agent-holder'" in data["error"]
         assert "expected 'other-agent'" in data["error"]
+        assert data["details"] == {"issue_id": issue.id, "observed": "agent-holder", "expected": "other-agent"}
+
+    async def test_remove_label_defaults_expected_assignee_to_actor_for_held_issue(self, mcp_db: FiligreeDB) -> None:
+        issue = mcp_db.create_issue("Claim-aware remove label")
+        mcp_db.add_label(issue.id, "needs-review")
+        mcp_db.claim_issue(issue.id, assignee="agent-holder")
+
+        result = await call_tool("remove_label", {"issue_id": issue.id, "label": "needs-review", "actor": "other-agent"})
+
+        data = _parse(result)
+        assert data["code"] == ErrorCode.CONFLICT
+        assert data["details"] == {"issue_id": issue.id, "observed": "agent-holder", "expected": "other-agent"}
 
     async def test_add_label_rejects_reserved_type_name(self, mcp_db: FiligreeDB) -> None:
         issue = mcp_db.create_issue("Labelable")
@@ -1189,6 +1237,28 @@ class TestStartWork:
         data = _parse(result)
         assert data["code"] == ErrorCode.NOT_FOUND
 
+    async def test_start_work_returns_conflict_for_already_claimed_issue(self, mcp_db: FiligreeDB) -> None:
+        """MCP start_work must surface a CONFLICT envelope on an ownership race.
+
+        Mirrors the ``claim_issue`` MCP test pattern: a claim already held by
+        another assignee raises ``ClaimConflictError`` deep in the DB layer;
+        the tool must emit ``ErrorCode.CONFLICT`` with structured details so
+        MCP consumers can branch correctly. Falling through to the generic
+        ``ValueError`` handler would mis-tag the race as VALIDATION.
+        """
+        issue = mcp_db.create_issue("mcp-start-work-race", type="task")
+        mcp_db.claim_issue(issue.id, assignee="agent-holder")
+
+        result = await call_tool("start_work", {"issue_id": issue.id, "assignee": "agent-challenger"})
+
+        data = _parse(result)
+        assert data["code"] == ErrorCode.CONFLICT
+        assert data["details"] == {
+            "issue_id": issue.id,
+            "observed": "agent-holder",
+            "expected": "agent-challenger",
+        }
+
     async def test_start_next_work_picks_highest_priority(self, mcp_db: FiligreeDB) -> None:
         mcp_db.create_issue("mcp-d6-next-low", type="task", priority=4)
         high = mcp_db.create_issue("mcp-d6-next-high", type="task", priority=0)
@@ -1233,6 +1303,7 @@ class TestClaimIssue:
         result = await call_tool("claim_issue", {"issue_id": issue.id, "assignee": "agent-2"})
         data = _parse(result)
         assert data["code"] == ErrorCode.CONFLICT
+        assert data["details"] == {"issue_id": issue.id, "observed": "agent-1", "expected": "agent-2"}
 
     async def test_claim_released_wip_issue_for_handoff(self, mcp_db: FiligreeDB) -> None:
         """release_claim auto-reverts wip→open (filigree-cb980eee0d, P1.3),
@@ -1251,16 +1322,15 @@ class TestClaimIssue:
         assert data["status"] == "open"
         assert data["assignee"] == "agent-bravo"
 
-    async def test_claim_closed_issue_is_invalid_transition(self, mcp_db: FiligreeDB) -> None:
+    async def test_claim_closed_issue_is_validation(self, mcp_db: FiligreeDB) -> None:
         issue = mcp_db.create_issue("Closed claim", type="task")
         mcp_db.close_issue(issue.id, reason="done")
 
         result = await call_tool("claim_issue", {"issue_id": issue.id, "assignee": "agent-1"})
 
         data = _parse(result)
-        assert data["code"] == ErrorCode.INVALID_TRANSITION
-        assert "valid_transitions" in data
-        assert "hint" in data
+        assert data["code"] == ErrorCode.VALIDATION
+        assert "expected open-category state" in data["error"]
 
     async def test_claim_not_found(self, mcp_db: FiligreeDB) -> None:
         result = await call_tool("claim_issue", {"issue_id": "mcp-nonexistent", "assignee": "agent-1"})
@@ -1381,6 +1451,7 @@ class TestClaimLeaseTools:
 
         data = _parse(result)
         assert data["code"] == ErrorCode.CONFLICT
+        assert data["details"] == {"issue_id": issue.id, "observed": "agent-current", "expected": "agent-old"}
 
 
 class TestGetChanges:
@@ -2543,6 +2614,31 @@ class TestFileTools:
         assert detail["file"]["file_id"] == created["file_id"]
         assert "id" not in detail["file"]
         assert detail["file"]["path"] == "src/example.py"
+
+    async def test_register_file_displaced_under_clarion_mode(self, clarion_mcp_db: FiligreeDB, caplog: pytest.LogCaptureFixture) -> None:
+        with caplog.at_level(logging.WARNING, logger="filigree.mcp_tools.files"):
+            data = _parse(await call_tool("register_file", {"path": "src/example.py", "language": "python"}))
+
+        assert data["code"] == ErrorCode.FILE_REGISTRY_DISPLACED
+        assert "http://localhost:9111/api/v1/files" in data["error"]
+        assert "src/example.py" in data["error"]
+        records = [record for record in caplog.records if record.message == "file_registry_displaced_registration_rejected"]
+        assert records
+        assert records[0].tool == "mcp"
+        assert records[0].file_path == "src/example.py"
+        assert clarion_mcp_db.registry.is_displaced() is True
+
+    async def test_register_file_displacement_uses_registry_protocol(self, mcp_db: FiligreeDB) -> None:
+        # This deliberately constructs an invalid hybrid state that FiligreeDB.__init__
+        # rejects. The point is to pin the handler to registry.is_displaced(), not the
+        # cached backend label, if future tests monkeypatch the registry protocol.
+        mcp_db.registry_backend = "clarion"
+        mcp_db.clarion_config = {"base_url": "http://localhost:9111"}
+
+        data = _parse(await call_tool("register_file", {"path": "src/protocol.py", "language": "python"}))
+
+        assert "error" not in data
+        assert data["path"] == "src/protocol.py"
 
     async def test_register_file_infers_language_without_hint(self, mcp_db: FiligreeDB) -> None:
         py = _parse(await call_tool("register_file", {"path": "src/inferred.py"}))
@@ -3712,7 +3808,38 @@ class TestMCPReleaseClaim:
 
         data = _parse(result)
         assert data["code"] == ErrorCode.CONFLICT
+        assert data["details"] == {"issue_id": issue.id, "observed": "agent-2", "expected": "agent-1"}
         assert mcp_db.get_issue(issue.id).assignee == "agent-2"
+
+    async def test_release_claim_invalid_reverse_transition_via_mcp(
+        self,
+        mcp_db: FiligreeDB,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from filigree.types.api import InvalidTransitionError
+
+        issue = mcp_db.create_issue("Reverse transition MCP")
+        mcp_db.start_work(issue.id, assignee="agent-1", actor="agent-1")
+        original_validate_transition = mcp_db.templates.validate_transition
+
+        def fail_backward_validation(
+            type_name: str,
+            from_state: str,
+            to_state: str,
+            fields: dict[str, Any],
+            *,
+            backward: bool = False,
+        ) -> Any:
+            if backward:
+                raise InvalidTransitionError(type_name, from_state, to_state=to_state, backward=True)
+            return original_validate_transition(type_name, from_state, to_state, fields, backward=backward)
+
+        monkeypatch.setattr(mcp_db.templates, "validate_transition", fail_backward_validation)
+
+        result = await call_tool("release_claim", {"issue_id": issue.id, "actor": "agent-1"})
+
+        data = _parse(result)
+        assert data["code"] == ErrorCode.INVALID_TRANSITION
 
     async def test_release_not_found_via_mcp(self, mcp_db: FiligreeDB) -> None:
         result = await call_tool("release_claim", {"issue_id": "mcp-nonexistent"})

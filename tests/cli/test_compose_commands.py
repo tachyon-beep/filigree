@@ -35,6 +35,31 @@ class TestStartWorkCli:
         assert "type" in data
         assert "priority" in data
 
+    def test_start_work_returns_conflict_for_already_claimed_issue(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        """start-work --json must emit ErrorCode.CONFLICT (not VALIDATION) for a claim race.
+
+        The optimistic-lock check raises ``ClaimConflictError`` (a ``ValueError``
+        subclass). Catching it as a generic ValueError previously misclassified
+        the race as VALIDATION; JSON consumers branching on ``code`` could no
+        longer distinguish "another agent holds this" from "bad input."
+        """
+        runner, _ = cli_in_project
+        created = runner.invoke(cli, ["create", "Race for ownership"])
+        assert created.exit_code == 0
+        issue_id = _extract_id(created.output)
+        runner.invoke(cli, ["claim", issue_id, "--assignee", "agent-holder"])
+
+        result = runner.invoke(cli, ["start-work", issue_id, "--assignee", "agent-challenger", "--json"])
+
+        assert result.exit_code == 1
+        data = json.loads(result.output)
+        assert data["code"] == "CONFLICT"
+        assert data["details"] == {
+            "issue_id": issue_id,
+            "observed": "agent-holder",
+            "expected": "agent-challenger",
+        }
+
     def test_happy_path_with_target_status(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         """--target-status lets caller override the canonical wip status."""
         runner, _ = cli_in_project
@@ -126,6 +151,23 @@ class TestStartWorkCli:
         data = json.loads(result.output)
         assert data["code"] == "INVALID_TRANSITION"
         assert "error" in data
+
+    def test_invalid_target_status_includes_valid_transitions(self, cli_in_project: tuple[CliRunner, Path]) -> None:
+        """Typed InvalidTransitionError still carries transition hints."""
+        runner, _ = cli_in_project
+        r = runner.invoke(cli, ["create", "Fresh bug", "--type", "bug", "--field", "severity=major"])
+        issue_id = _extract_id(r.output)
+
+        result = runner.invoke(
+            cli,
+            ["start-work", issue_id, "--assignee", "erin", "--target-status", "fixing", "--json"],
+        )
+
+        assert result.exit_code == 1
+        data = json.loads(result.output)
+        assert data["code"] == "INVALID_TRANSITION"
+        assert {t["to"] for t in data["valid_transitions"]} == {"confirmed", "wont_fix", "not_a_bug"}
+        assert data["hint"] == "Use get_valid_transitions to see allowed state changes"
 
     def test_actor_defaults_to_assignee(self, cli_in_project: tuple[CliRunner, Path]) -> None:
         """When --actor is omitted, the audit-trail actor should be the assignee.

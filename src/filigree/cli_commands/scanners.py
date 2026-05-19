@@ -24,8 +24,16 @@ import click
 from filigree.bundled_scanners import BUNDLED_SCANNERS, bundled_scanner_matches, get_bundled_scanner, looks_like_stale_bundled_scanner
 from filigree.cli_common import get_db
 from filigree.core import FILIGREE_DIR_NAME, VALID_SEVERITIES, ProjectNotInitialisedError, find_filigree_anchor
-from filigree.mcp_tools.scanners import _load_scanner_or_error, _report_finding_observation_ids, _validate_localhost_url
+from filigree.db_files import INGESTED_FILE_ID_KEY
+from filigree.mcp_tools.scanners import (
+    _load_scanner_or_error,
+    _report_finding_observation_ids,
+    _reported_finding_record,
+    _validate_localhost_url,
+)
 from filigree.paths import safe_path
+from filigree.registry import RegistryFileNotFoundError, RegistryResolutionError, RegistryUnavailableError
+from filigree.registry_errors import registry_error_response
 from filigree.scanner_callback import resolve_scanner_api_url_with_source
 from filigree.scanner_prompts import applicable_prompt_pack_names, expand_prompt_pack_names, list_prompt_packs
 from filigree.scanner_runtime import ScannerSpawnError, _spawn_scan
@@ -76,10 +84,28 @@ def _emit_error(msg: str, code: Any, *, as_json: bool, details: dict[str, Any] |
     sys.exit(1)
 
 
+def _emit_registry_error(exc: RegistryResolutionError | RegistryUnavailableError, *, action: str, as_json: bool) -> None:
+    response = registry_error_response(exc, action=action)
+    _emit_error(response["error"], response["code"], as_json=as_json, details=response.get("details"))
+
+
 def _mark_reserved_scan_failed(tracker: Any, scan_run_id: str, error_message: str) -> None:
     """Best-effort terminalization for a reserved run after post-spawn tracking fails."""
     with contextlib.suppress(sqlite3.Error, KeyError, ValueError):
         tracker.update_scan_run_status(scan_run_id, "failed", error_message=error_message)
+
+
+def _resolve_scanner_api_url_or_die(
+    filigree_dir: Path,
+    *,
+    explicit_api_url: str | None = None,
+    as_json: bool,
+) -> Any:
+    try:
+        return resolve_scanner_api_url_with_source(filigree_dir, explicit_api_url=explicit_api_url)
+    except ValueError as exc:
+        _emit_error(str(exc), ErrorCode.VALIDATION, as_json=as_json)
+        raise AssertionError("unreachable: _emit_error calls sys.exit(1)") from None  # pragma: no cover
 
 
 # ---------------------------------------------------------------------------
@@ -331,7 +357,7 @@ def trigger_scan_cmd(scanner: str, file_path: str, api_url: str | None, prompt: 
 
     filigree_dir = _resolve_filigree_dir_or_die(as_json)
     _validate_prompt_or_die(prompt, as_json=as_json)
-    api_resolution = resolve_scanner_api_url_with_source(filigree_dir, explicit_api_url=api_url)
+    api_resolution = _resolve_scanner_api_url_or_die(filigree_dir, explicit_api_url=api_url, as_json=as_json)
     api_url = api_resolution.url
 
     url_err = _validate_localhost_url(api_url)
@@ -366,7 +392,11 @@ def trigger_scan_cmd(scanner: str, file_path: str, api_url: str | None, prompt: 
     canonical_path = str(target.relative_to(project_root.resolve()))
 
     with get_db() as tracker:
-        file_record = tracker.register_file(canonical_path)
+        try:
+            file_record = tracker.register_file(canonical_path)
+        except (RegistryResolutionError, RegistryUnavailableError) as exc:
+            _emit_registry_error(exc, action="triggering scan", as_json=as_json)
+            return
         ts = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S")
         scan_run_id = f"{scanner}-{ts}-{secrets.token_hex(3)}"
 
@@ -513,7 +543,7 @@ def trigger_scan_batch_cmd(scanner: str, file_paths: tuple[str, ...], api_url: s
 
     filigree_dir = _resolve_filigree_dir_or_die(as_json)
     _validate_prompt_or_die(prompt, as_json=as_json)
-    api_resolution = resolve_scanner_api_url_with_source(filigree_dir, explicit_api_url=api_url)
+    api_resolution = _resolve_scanner_api_url_or_die(filigree_dir, explicit_api_url=api_url, as_json=as_json)
     api_url = api_resolution.url
 
     fp_list = list(file_paths)
@@ -563,7 +593,11 @@ def trigger_scan_batch_cmd(scanner: str, file_paths: tuple[str, ...], api_url: s
                 skipped.append({"file_path": fp, "reason": "duplicate"})
                 continue
             seen_canonical.add(cp)
-            file_record = tracker.register_file(cp)
+            try:
+                file_record = tracker.register_file(cp)
+            except (RegistryResolutionError, RegistryUnavailableError) as exc:
+                _emit_registry_error(exc, action="triggering batch scan", as_json=as_json)
+                return
             canonical_paths.append(cp)
             file_ids.append(file_record.id)
 
@@ -816,7 +850,7 @@ def preview_scan_cmd(scanner: str, file_path: str, prompt: str, as_json: bool) -
     _validate_scanner_accepts_prompt_or_die(cfg, prompt, as_json=as_json)
 
     canonical_path = str(target.relative_to(project_root.resolve()))
-    api_resolution = resolve_scanner_api_url_with_source(filigree_dir)
+    api_resolution = _resolve_scanner_api_url_or_die(filigree_dir, as_json=as_json)
     try:
         cmd = cfg.build_command(
             file_path=canonical_path,
@@ -1024,6 +1058,31 @@ def report_finding_cmd(
                 create_observations=create_paired_observation,
                 observation_actor=actor.strip(),
             )
+        except RegistryResolutionError as exc:
+            _logger.warning("report_finding registry resolution failed: %s", exc)
+            code = ErrorCode.NOT_FOUND if isinstance(exc, RegistryFileNotFoundError) else ErrorCode.VALIDATION
+            cause = "registry_file_not_found" if isinstance(exc, RegistryFileNotFoundError) else "registry_resolution_rejected"
+            _emit_error(
+                f"Registry could not resolve file while reporting finding: {exc}",
+                code,
+                as_json=as_json,
+                details={"cause": cause},
+            )
+            return
+        except RegistryUnavailableError as exc:
+            _logger.warning("report_finding registry unavailable: %s", exc)
+            _emit_error(
+                f"Registry unavailable while reporting finding: {exc}",
+                ErrorCode.REGISTRY_UNAVAILABLE,
+                as_json=as_json,
+                details={
+                    "cause": "registry_unavailable",
+                    "cause_kind": exc.cause_kind,
+                    "path": exc.path,
+                    "url": exc.url,
+                },
+            )
+            return
         except ValueError as exc:
             # Mirrors the HTTP route at dashboard_routes/files.py: a ValueError
             # from process_scan_results is caller-side malformed-input, not a
@@ -1035,11 +1094,23 @@ def report_finding_cmd(
             _logger.error("report_finding storage failure: %s", exc)
             _emit_error(f"Failed to report finding: {exc}", ErrorCode.IO, as_json=as_json)
             return
-        file_record = tracker.register_file(finding_record["path"])
+        reported_file_id = finding_record.get(INGESTED_FILE_ID_KEY)
+        ingested_finding = _reported_finding_record(
+            tracker,
+            result,
+            file_id=reported_file_id if isinstance(reported_file_id, str) else None,
+            rule_id=rule_id,
+            line_start=line_start,
+            message=message,
+            severity=severity,
+        )
+        if ingested_finding is None:
+            _emit_error("Reported finding was not found after ingestion", ErrorCode.IO, as_json=as_json)
+            return
         if create_paired_observation and result["new_finding_ids"]:
             observation_ids = _report_finding_observation_ids(
                 tracker,
-                file_id=file_record.id,
+                file_id=ingested_finding["file_id"],
                 finding_id=result["new_finding_ids"][0],
             )
 

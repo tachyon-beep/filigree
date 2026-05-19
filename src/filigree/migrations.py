@@ -598,6 +598,34 @@ def migrate_v13_to_v14(conn: sqlite3.Connection) -> None:
     add_column(conn, "file_events", "actor", "TEXT", "''")
 
 
+def migrate_v15_to_v16(conn: sqlite3.Connection) -> None:
+    """v15 -> v16: Add event_seq column + rebuild the unique event index (2.1.0 §0.2).
+
+    Previously the events table's UNIQUE event index was
+    ``(issue_id, event_type, actor, old_value, new_value, created_at)``.
+    With ISO-second precision on ``created_at``, same-actor heartbeats in
+    the same second collided and silently lost events under ``INSERT OR
+    IGNORE`` — the silent-failure C3 surface from the 2.1.0 panel review.
+
+    The new column ``event_seq INTEGER NOT NULL DEFAULT 0`` is a
+    per-issue event ordering key. ``_record_event`` computes the next value inline under the
+    caller-held writer transaction via
+    ``COALESCE((SELECT MAX(event_seq) FROM events WHERE issue_id = ?),
+    -1) + 1`` so bursts at the same second land distinct rows. Historical
+    rows default to 0; since the old behaviour was to silently drop the
+    collision, replaying history with all-zero ``event_seq`` is no worse
+    than the pre-v16 state.
+    """
+    add_column(conn, "events", "event_seq", "INTEGER NOT NULL", "0")
+    conn.execute("DROP INDEX IF EXISTS idx_events_dedup")
+    conn.execute(
+        "CREATE UNIQUE INDEX idx_events_dedup ON events("
+        "issue_id, event_type, actor, "
+        "coalesce(old_value, ''), coalesce(new_value, ''), "
+        "created_at, event_seq)"
+    )
+
+
 def migrate_v14_to_v15(conn: sqlite3.Connection) -> None:
     """v14 -> v15: Add entity_associations table (ADR-029, Clarion B.7).
 
@@ -619,6 +647,12 @@ def migrate_v14_to_v15(conn: sqlite3.Connection) -> None:
     add_index(conn, "ix_entity_assoc_entity", "entity_associations", ["clarion_entity_id"])
 
 
+def migrate_v16_to_v17(conn: sqlite3.Connection) -> None:
+    """v16 -> v17: Add ADR-014 file registry metadata columns."""
+    add_column(conn, "file_records", "content_hash", "TEXT NOT NULL", "''")
+    add_column(conn, "file_records", "registry_backend", "TEXT NOT NULL", "'local'")
+
+
 MIGRATIONS: dict[int, MigrationFn] = {
     1: migrate_v1_to_v2,
     2: migrate_v2_to_v3,
@@ -634,6 +668,8 @@ MIGRATIONS: dict[int, MigrationFn] = {
     12: migrate_v12_to_v13,
     13: migrate_v13_to_v14,
     14: migrate_v14_to_v15,
+    15: migrate_v15_to_v16,
+    16: migrate_v16_to_v17,
 }
 
 
@@ -698,6 +734,7 @@ def apply_pending_migrations(conn: sqlite3.Connection, target_version: int) -> i
             raise MigrationError(version, version + 1, KeyError(msg))
 
         logger.info("Applying migration v%d → v%d ...", version, version + 1)
+        migration_failed = False
         try:
             # Disable FK enforcement so rebuild_table() can atomically
             # DROP + RENAME FK-referenced tables within the transaction.
@@ -715,13 +752,27 @@ def apply_pending_migrations(conn: sqlite3.Connection, target_version: int) -> i
             applied += 1
             logger.info("Migration v%d → v%d complete.", version, version + 1)
         except Exception as exc:
+            migration_failed = True
             conn.rollback()
             raise MigrationError(version, version + 1, exc) from exc
         finally:
             # Restore caller's original FK enforcement setting.
             # After commit/rollback the connection is in autocommit mode,
             # so this PRAGMA takes effect immediately.
-            conn.execute(f"PRAGMA foreign_keys={'ON' if original_fk else 'OFF'}")
+            try:
+                conn.execute(f"PRAGMA foreign_keys={'ON' if original_fk else 'OFF'}")
+            except sqlite3.Error as exc:
+                logger.error(
+                    "foreign_key_restore_failed",
+                    extra={
+                        "from_version": version,
+                        "to_version": version + 1,
+                        "original_foreign_keys": original_fk,
+                    },
+                    exc_info=True,
+                )
+                if not migration_failed:
+                    raise MigrationError(version, version + 1, exc) from exc
 
     return applied
 

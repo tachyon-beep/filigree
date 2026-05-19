@@ -702,3 +702,90 @@ class TestWriteRoutesWrongProjectError:
         assert resp.status_code == 404, resp.text
         body = resp.json()
         assert body["code"] == "NOT_FOUND", body
+
+    async def test_http_400_for_foreign_id_does_not_leak_prefix(self, client: AsyncClient) -> None:
+        """2.1.0 §1.2: untrusted HTTP responses must use ``safe_message``.
+
+        Probing for "is project X open?" by trying ``X-something/claim``
+        and pattern-matching the error body must not work — the
+        envelope's ``error`` field is a generic string, neither the open
+        DB's prefix (``test``) nor the offending id's prefix
+        (``foreignproj``) appears.
+
+        Renamed from the design's ``test_http_404_for_foreign_id_…`` because
+        write routes return 400/VALIDATION (read-route 404 enforcement
+        lands in §1.3 with its own pinning test).
+        """
+        resp = await client.post(
+            f"/api/issue/{self._FOREIGN_A}/claim",
+            json={"assignee": "alice"},
+        )
+        assert resp.status_code == 400, resp.text
+        body = resp.json()
+        # safe_message contains generic wording, not project prefixes.
+        assert "foreignproj" not in body["error"], body
+        assert "test" not in body["error"].lower() or "this project" in body["error"].lower()
+        # Concretely: the canonical safe wording must be present.
+        from filigree.core import WrongProjectError
+
+        assert body["error"] == WrongProjectError.SAFE_MESSAGE
+
+    @pytest.mark.parametrize(
+        ("method", "path", "json_body", "foreign_fragments"),
+        [
+            ("post", "/api/issue/foreignproj-aaaaaaaa00/reopen", {}, ("foreignproj", "test")),
+            ("post", "/api/loom/issues/foreignproj-aaaaaaaa00/reopen", {}, ("foreignproj", "test")),
+            (
+                "post",
+                "/api/issues",
+                {"title": "bad parent", "parent_id": "foreignproj-aaaaaaaa00"},
+                ("foreignproj", "test"),
+            ),
+            (
+                "post",
+                "/api/loom/issues",
+                {"title": "bad parent", "parent_id": "foreignproj-aaaaaaaa00"},
+                ("foreignproj", "test"),
+            ),
+        ],
+    )
+    async def test_create_and_reopen_wrong_project_errors_use_safe_message(
+        self,
+        client: AsyncClient,
+        method: str,
+        path: str,
+        json_body: dict[str, str],
+        foreign_fragments: tuple[str, ...],
+    ) -> None:
+        from filigree.core import WrongProjectError
+
+        resp = await getattr(client, method)(path, json=json_body)
+
+        assert resp.status_code == 400, resp.text
+        body = resp.json()
+        assert body["code"] == "VALIDATION", body
+        assert body["error"] == WrongProjectError.SAFE_MESSAGE
+        for fragment in foreign_fragments:
+            assert fragment not in body["error"], body
+
+
+class TestReleaseClaimErrorRouting:
+    async def test_residual_value_error_is_validation_for_classic_and_loom_release(
+        self,
+        bug_db: FiligreeDB,
+        client: AsyncClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        issue = bug_db.create_issue("Release validation route", priority=2)
+
+        def raise_validation(*_args: object, **_kwargs: object) -> object:
+            raise ValueError("synthetic validation failure")
+
+        monkeypatch.setattr(bug_db, "release_claim", raise_validation)
+
+        for path in (f"/api/issue/{issue.id}/release", f"/api/loom/issues/{issue.id}/release"):
+            resp = await client.post(path, json={"actor": "agent"})
+            body = resp.json()
+            assert resp.status_code == 400
+            assert body["code"] == "VALIDATION"
+            assert body["error"] == "synthetic validation failure"

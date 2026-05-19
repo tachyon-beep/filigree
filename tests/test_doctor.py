@@ -10,11 +10,13 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from filigree.core import (
+    CONF_FILENAME,
     CONFIG_FILENAME,
     DB_FILENAME,
     FILIGREE_DIR_NAME,
     SUMMARY_FILENAME,
     FiligreeDB,
+    write_conf,
     write_config,
 )
 from filigree.db_schema import CURRENT_SCHEMA_VERSION
@@ -324,6 +326,35 @@ class TestDoctorDatabase:
         schema_result = next(r for r in results if r.name == "Schema version")
         assert schema_result.passed is False
         assert "newer" in schema_result.fix_hint.lower() or "Upgrade" in schema_result.fix_hint
+
+    def test_clarion_configured_project_warns_on_local_file_records(self, tmp_path: Path) -> None:
+        _make_project(tmp_path)
+        db_path = tmp_path / FILIGREE_DIR_NAME / DB_FILENAME
+        db = FiligreeDB(db_path, prefix="tst")
+        try:
+            db.initialize()
+            db.register_file("src/legacy.py")
+        finally:
+            db.close()
+        write_conf(
+            tmp_path / CONF_FILENAME,
+            {
+                "version": 1,
+                "project_name": "tst",
+                "prefix": "tst",
+                "db": ".filigree/filigree.db",
+                "registry_backend": "clarion",
+                "clarion": {"base_url": "http://clarion.test"},
+            },
+        )
+
+        results = run_doctor(tmp_path)
+
+        registry_result = next(r for r in results if r.name == "File registry backend state")
+        assert registry_result.passed is False
+        assert "configured for Clarion" in registry_result.message
+        assert "1 file_records row(s)" in registry_result.message
+        assert "migrate-registry --to clarion" in registry_result.fix_hint
 
 
 class TestDoctorHonorsConfDbPath:

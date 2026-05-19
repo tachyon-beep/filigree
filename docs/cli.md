@@ -241,12 +241,16 @@ Close one or more issues. Accepts multiple IDs.
 |-----------|------|-------------|
 | `ids` | string... | One or more issue IDs (positional, variadic) |
 | `--reason` | string | Close reason |
+| `--status` | string | Explicit done-category target |
+| `--force` | flag | Use the declared reverse/escape edge for cleanup closes |
 | `--expected-assignee` | string | Expected current holder for coordinator writes |
 
 When using `--json`, the output includes `succeeded`, `failed`, and
 `newly_unblocked`. Closed issues with active critical `must_consider`
 annotations include an `annotation_warnings` array. Plain-text close prints the
 same warning after the close; V1 warnings are advisory and do not block closure.
+`--force` validates through template `reverse_transitions` and records
+`transition_forced` before `status_changed`.
 
 ### `reopen`
 
@@ -452,7 +456,8 @@ Claim the highest-priority ready issue.
 Release a claimed issue by clearing its assignee without changing status. By default this is strict: releasing an
 unassigned issue returns a conflict. Use `--if-held` for idempotent cleanup flows; it no-ops when the issue is
 already unassigned and only clears a live claim held by `--expected-assignee`, or by the global `--actor` when no
-expected assignee is provided.
+expected assignee is provided. If another actor holds the claim, the command returns `CONFLICT`; do not treat that
+as a cleanup no-op.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -566,6 +571,7 @@ Close multiple issues.
 |-----------|------|-------------|
 | `ids` | string... | Issue IDs (positional, multiple) |
 | `--reason` | string | Close reason |
+| `--force` | flag | Use declared reverse/escape edges for cleanup closes |
 | `--expected-assignee` | string | Expected current holder for coordinator writes |
 
 ### `batch-add-label`
@@ -669,7 +675,7 @@ List all registered issue types with their pack and status flow.
 ### `type-info`
 
 Compatibility alias for `get-template`. Shows the same full workflow definition for an issue type:
-pack, statuses, transitions, fields, and enforcement rules.
+pack, statuses, forward transitions, reverse transitions, fields, and enforcement rules.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -1230,9 +1236,14 @@ filigree-scanner-codex --root <project-root> --file <path> --max-files 1 \
 
 Runners execute with the project as their current working directory and post
 results to the living scan-results endpoint, `/api/scan-results`, which aliases
-the recommended Loom generation. If a future runner flag changes, refresh
-managed project registrations with `filigree scanner enable <name> --force`;
-`filigree doctor` reports bundled registrations that look stale.
+the recommended Loom generation. When `--api-url` is omitted during a direct
+runner invocation, the runner resolves the same active local dashboard target
+used by `trigger-scan`: `.filigree/ephemeral.port` in ethereal mode, the
+configured daemon port in server mode, and `http://localhost:8377` only as a
+legacy fallback outside an initialized Filigree project. If a future runner flag
+changes, refresh managed project registrations with `filigree scanner enable
+<name> --force`; `filigree doctor` reports bundled registrations that look
+stale.
 
 ### `trigger-scan`
 
@@ -1324,6 +1335,8 @@ but they are too broad for final cleanup by themselves.
 2. Preview live claim cleanup:
    `filigree --actor <agent> release-my-claims --label <session-label> --dry-run`.
    If the preview is correct, repeat without `--dry-run` and include `--reason`.
+   A held-by-other mismatch is a conflict and should be investigated or retried
+   with an explicit coordinator override, not ignored as an idempotent no-op.
 3. Triage observations with `list-observations --actor <agent>`, then choose
    `promote-observations-to-issue`, `batch-link-observations`, or
    `batch-dismiss-observations` so each pending note is tracked, attached as

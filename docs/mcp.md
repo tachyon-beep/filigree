@@ -165,6 +165,10 @@ the observed holder; mismatches return `CONFLICT` and name both holders.
 | `fields` | object | no | Extra fields to set while closing (for enforced workflows) |
 | `actor` | string | no | Agent identity for audit trail |
 | `expected_assignee` | string | no | Override expected holder for coordinator writes |
+| `force` | boolean | no | Use the declared reverse/escape edge for cleanup closes |
+
+`force=true` validates against template `reverse_transitions` and emits
+`transition_forced`; normal close validation remains forward-only.
 
 When an issue has active `critical=true` annotations linked with
 `relationship="must_consider"`, `close_issue` still closes the issue but returns
@@ -380,7 +384,7 @@ Step deps within a phase use integer indices. Cross-phase deps use `"phase_idx.s
 |-----------|------|----------|-------------|
 | `issue_id` | string | yes | Issue ID |
 | `actor` | string | no | Agent identity for audit trail |
-| `if_held` | boolean | no | Idempotent release-if-held mode; unassigned issues are returned unchanged |
+| `if_held` | boolean | no | Idempotent release-if-held mode; unassigned issues are returned unchanged, but held-by-other mismatches return `CONFLICT` |
 | `expected_assignee` | string | no | Only release when the current assignee matches this value; defaults to `actor` in `if_held` mode |
 | `reason` | string | no | Audit reason recorded on the release event |
 
@@ -532,7 +536,7 @@ Compatibility alias for `get_template`; returns the same canonical workflow defi
 #### `get_template`
 
 Canonical workflow-discovery tool for issue types. Returns pack, states,
-transitions, initial state, and fields schema.
+forward transitions, reverse transitions, initial state, and fields schema.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -618,7 +622,8 @@ agent's artifacts.
 2. Preview and release live claims with `release_my_claims(actor=..., label=...,
    dry_run=true)`, then repeat with `dry_run=false` and a `reason` once the
    preview is right. Use `label_prefix` only when the prefix is unique enough
-   for the session.
+   for the session. A claim held by another actor is a `CONFLICT`, not a
+   release-if-held no-op; investigate it before retrying as a coordinator.
 3. List pending notes with `list_observations(actor=...)`, then use
    `promote_observations_to_issue`, `batch_link_observations`, or
    `batch_dismiss_observations` so observations are either tracked, attached as

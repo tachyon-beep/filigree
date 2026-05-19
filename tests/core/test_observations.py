@@ -13,9 +13,26 @@ from filigree.core import FiligreeDB
 from filigree.db_base import _now_iso
 
 from .._db_factory import make_db
+from .._fakes.registry import FixedRegistry
 
 
 class TestCreateObservation:
+    def test_create_observation_file_path_uses_registry_resolved_file_id(self, tmp_path: Path) -> None:
+        db = FiligreeDB(
+            tmp_path / "filigree.db",
+            prefix="test",
+            registry=FixedRegistry(file_id="core:file:obs123@src/observed.py"),
+        )
+        try:
+            db.initialize()
+
+            obs = db.create_observation("file-level bug", file_path="src/observed.py")
+
+            assert obs["file_id"] == "core:file:obs123@src/observed.py"
+            assert db.get_file("core:file:obs123@src/observed.py").path == "src/observed.py"
+        finally:
+            db.close()
+
     def test_create_minimal(self, db: FiligreeDB) -> None:
         obs = db.create_observation("Something looks wrong here")
         assert obs["id"].startswith("test-")
@@ -483,8 +500,49 @@ class TestSweepExceptionSuppression:
         # Stats count must match the visible rows (not include the expired row)
         assert stats["count"] == 1
 
-    def test_sweep_suppresses_integrity_error(self, db: FiligreeDB) -> None:
-        """IntegrityError during sweep is suppressed — sweep is best-effort for all sqlite3.Error."""
+    def test_repeated_sweep_failures_are_visible_in_stats(self, db: FiligreeDB) -> None:
+        db.create_observation("survives repeated sweep failure")
+        real_conn = db._conn
+
+        def _fail_on_sweep_delete(real: Any, sql: str, params: Any = ()) -> Any:
+            if "DELETE FROM observations WHERE expires_at" in sql:
+                raise sqlite3.OperationalError("disk I/O error")
+            return real.execute(sql, params)
+
+        db._conn = _InterceptingConn(real_conn, _fail_on_sweep_delete)  # type: ignore[assignment]
+        try:
+            db.list_observations()
+            db.list_observations()
+        finally:
+            db._conn = real_conn
+
+        stats = db.observation_stats(sweep=False)
+        assert stats["sweep_consecutive_failures"] == 2
+        assert stats["last_successful_sweep_at"] is None
+
+    def test_successful_sweep_resets_failure_count(self, db: FiligreeDB) -> None:
+        db.create_observation("survives transient sweep failure")
+        real_conn = db._conn
+
+        def _fail_on_sweep_delete(real: Any, sql: str, params: Any = ()) -> Any:
+            if "DELETE FROM observations WHERE expires_at" in sql:
+                raise sqlite3.OperationalError("disk I/O error")
+            return real.execute(sql, params)
+
+        db._conn = _InterceptingConn(real_conn, _fail_on_sweep_delete)  # type: ignore[assignment]
+        try:
+            db.list_observations()
+        finally:
+            db._conn = real_conn
+
+        db.list_observations()
+
+        stats = db.observation_stats(sweep=False)
+        assert stats["sweep_consecutive_failures"] == 0
+        assert stats["last_successful_sweep_at"] is not None
+
+    def test_sweep_propagates_integrity_error(self, db: FiligreeDB) -> None:
+        """IntegrityError during sweep indicates a real invariant violation, not a transient lock."""
         import sqlite3
 
         db.create_observation("will survive sweep failure")
@@ -498,8 +556,8 @@ class TestSweepExceptionSuppression:
 
         db._conn = _InterceptingConn(real_conn, _fail_with_integrity)  # type: ignore[assignment]
         try:
-            result = db.list_observations()
-            assert len(result) == 1
+            with pytest.raises(sqlite3.IntegrityError, match="UNIQUE constraint failed"):
+                db.list_observations()
         finally:
             db._conn = real_conn
 
