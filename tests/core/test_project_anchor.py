@@ -27,6 +27,7 @@ import pytest
 
 from filigree.core import (
     CONF_FILENAME,
+    CONFIG_FILENAME,
     DB_FILENAME,
     FILIGREE_DIR_NAME,
     FiligreeDB,
@@ -632,6 +633,36 @@ class TestGitWorktreeDiscovery:
         assert conf_path == main / CONF_FILENAME
         assert find_filigree_conf(deep) == main / CONF_FILENAME
 
+    def test_copied_worktree_root_conf_with_tracked_dotfiligree_files_and_stale_db_rolls_up_to_main(self, tmp_path: Path) -> None:
+        """Tracked files and a stale generated DB do not make a worktree local.
+
+        This repo tracks ``.filigree/.gitkeep`` and scanner templates, so real
+        linked worktrees have a ``.filigree/`` directory even though the ignored
+        config metadata still live only in the main checkout. A previous buggy
+        open may also have created a tiny worktree-local DB; without local
+        config, that should still be treated as a stale artifact.
+        """
+        main = self._make_main_repo(tmp_path)
+        wt = self._make_worktree(main, tmp_path / "wt", "wt")
+        (wt / CONF_FILENAME).write_text((main / CONF_FILENAME).read_text(encoding="utf-8"), encoding="utf-8")
+        tracked_dir = wt / FILIGREE_DIR_NAME
+        (tracked_dir / "scanners").mkdir(parents=True)
+        (tracked_dir / ".gitkeep").write_text("", encoding="utf-8")
+        (tracked_dir / "scanners" / "claude-code.toml").write_text("[scanner]\n", encoding="utf-8")
+        stale_db = FiligreeDB(tracked_dir / DB_FILENAME, prefix="filigree")
+        stale_db.initialize()
+        stale_db.close()
+        deep = wt / "src" / "pkg"
+        deep.mkdir(parents=True)
+
+        assert not (tracked_dir / CONFIG_FILENAME).exists()
+        assert (tracked_dir / DB_FILENAME).exists()
+
+        project_root, conf_path = find_filigree_anchor(deep)
+        assert project_root == main
+        assert conf_path == main / CONF_FILENAME
+        assert find_filigree_conf(deep) == main / CONF_FILENAME
+
     def test_worktree_root_conf_with_metadata_dir_remains_local(self, tmp_path: Path) -> None:
         """An explicitly initialised worktree project still wins locally."""
         main = self._make_main_repo(tmp_path)
@@ -641,6 +672,7 @@ class TestGitWorktreeDiscovery:
             {"version": 1, "project_name": "local", "prefix": "local", "db": ".filigree/filigree.db"},
         )
         (wt / FILIGREE_DIR_NAME).mkdir()
+        write_config(wt / FILIGREE_DIR_NAME, {"prefix": "local", "version": 1})
         deep = wt / "src" / "pkg"
         deep.mkdir(parents=True)
 

@@ -239,9 +239,10 @@ def _resolve_to_main_worktree(start: Path) -> Path:
     (``.filigree.conf`` or legacy ``.filigree/``) sits between *start* and the
     worktree's ``.git`` pointer — that nested anchor wins, preserving the
     "child anchor overrides parent" contract for sub-projects nested inside a
-    worktree. A ``.filigree.conf`` copied to the linked worktree root without a
-    local ``.filigree/`` metadata directory is treated as the parent project's
-    tracked file, not as a separate project.
+    worktree. Root-level ``.filigree`` files copied to a linked worktree are
+    treated as the parent project's tracked files unless local
+    ``.filigree/config.json`` metadata proves the worktree was explicitly
+    initialised as its own Filigree project.
 
     Returns the main worktree root when *start* (or an ancestor up to the
     first ``.git`` entry) is inside a linked worktree AND no nested anchor
@@ -258,7 +259,7 @@ def _resolve_to_main_worktree(start: Path) -> Path:
         has_legacy_dir = legacy_dir.is_dir()
         if has_conf or has_legacy_dir:
             main_worktree = _main_worktree_from_git_path(git_path) if git_path.exists() else None
-            if main_worktree is not None and has_conf and not has_legacy_dir:
+            if main_worktree is not None and not _has_local_filigree_config(legacy_dir):
                 return main_worktree
             return start
         if not git_path.exists():
@@ -272,6 +273,11 @@ def _resolve_to_main_worktree(start: Path) -> Path:
             return start
         return main_worktree
     return start
+
+
+def _has_local_filigree_config(filigree_dir: Path) -> bool:
+    """Return whether ``filigree_dir`` proves a worktree-local install exists."""
+    return (filigree_dir / CONFIG_FILENAME).is_file()
 
 
 def _read_gitdir_pointer(git_path: Path) -> Path | None:
