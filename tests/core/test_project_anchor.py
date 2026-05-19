@@ -611,6 +611,44 @@ class TestGitWorktreeDiscovery:
         project_root, _ = find_filigree_anchor(wt)
         assert project_root == main
 
+    def test_copied_worktree_root_conf_without_metadata_rolls_up_to_main(self, tmp_path: Path) -> None:
+        """A linked worktree with only the tracked conf is still the main project.
+
+        Git worktrees copy tracked files such as ``.filigree.conf`` but not the
+        ignored ``.filigree/`` metadata directory. Treating that copied root conf
+        as a fresh project makes MCP/CLI resolve the DB inside the worktree and
+        fail instead of using the canonical tracker in the main checkout.
+        """
+        main = self._make_main_repo(tmp_path)
+        wt = self._make_worktree(main, tmp_path / "wt", "wt")
+        (wt / CONF_FILENAME).write_text((main / CONF_FILENAME).read_text(encoding="utf-8"), encoding="utf-8")
+        deep = wt / "src" / "pkg"
+        deep.mkdir(parents=True)
+
+        assert not (wt / FILIGREE_DIR_NAME).exists()
+
+        project_root, conf_path = find_filigree_anchor(deep)
+        assert project_root == main
+        assert conf_path == main / CONF_FILENAME
+        assert find_filigree_conf(deep) == main / CONF_FILENAME
+
+    def test_worktree_root_conf_with_metadata_dir_remains_local(self, tmp_path: Path) -> None:
+        """An explicitly initialised worktree project still wins locally."""
+        main = self._make_main_repo(tmp_path)
+        wt = self._make_worktree(main, tmp_path / "wt", "wt")
+        write_conf(
+            wt / CONF_FILENAME,
+            {"version": 1, "project_name": "local", "prefix": "local", "db": ".filigree/filigree.db"},
+        )
+        (wt / FILIGREE_DIR_NAME).mkdir()
+        deep = wt / "src" / "pkg"
+        deep.mkdir(parents=True)
+
+        project_root, conf_path = find_filigree_anchor(deep)
+        assert project_root == wt
+        assert conf_path == wt / CONF_FILENAME
+        assert find_filigree_conf(deep) == wt / CONF_FILENAME
+
     def test_nested_conf_inside_worktree_wins_over_main(self, tmp_path: Path) -> None:
         """A nested ``.filigree.conf`` inside a worktree subtree must still win.
 

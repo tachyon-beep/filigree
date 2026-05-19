@@ -228,10 +228,13 @@ def _resolve_to_main_worktree(start: Path) -> Path:
     and refuse to find the project's anchor in the main worktree — raising
     :class:`ForeignDatabaseError` for what is, in fact, the same project.
 
-    The redirect is suppressed when a closer anchor (``.filigree.conf`` or
-    legacy ``.filigree/``) sits between *start* and the worktree's ``.git``
-    pointer — that nested anchor wins, preserving the "child anchor
-    overrides parent" contract for sub-projects nested inside a worktree.
+    The redirect is suppressed when a closer nested anchor
+    (``.filigree.conf`` or legacy ``.filigree/``) sits between *start* and the
+    worktree's ``.git`` pointer — that nested anchor wins, preserving the
+    "child anchor overrides parent" contract for sub-projects nested inside a
+    worktree. A ``.filigree.conf`` copied to the linked worktree root without a
+    local ``.filigree/`` metadata directory is treated as the parent project's
+    tracked file, not as a separate project.
 
     Returns the main worktree root when *start* (or an ancestor up to the
     first ``.git`` entry) is inside a linked worktree AND no nested anchor
@@ -241,29 +244,26 @@ def _resolve_to_main_worktree(start: Path) -> Path:
     no ``.git`` found, or a malformed ``.git`` file.
     """
     for parent in [start, *start.parents]:
-        # A nested anchor in the worktree subtree wins — don't redirect past it.
-        if (parent / CONF_FILENAME).is_file() or (parent / FILIGREE_DIR_NAME).is_dir():
-            return start
         git_path = parent / ".git"
+        conf_path = parent / CONF_FILENAME
+        legacy_dir = parent / FILIGREE_DIR_NAME
+        has_conf = conf_path.is_file()
+        has_legacy_dir = legacy_dir.is_dir()
+        if has_conf or has_legacy_dir:
+            main_worktree = _main_worktree_from_git_path(git_path) if git_path.exists() else None
+            if main_worktree is not None and has_conf and not has_legacy_dir:
+                return main_worktree
+            return start
         if not git_path.exists():
             continue
         # Plain repo: existing walk-up handles it correctly.
         if git_path.is_dir():
             return start
         # ``.git`` is a file — worktree pointer or submodule pointer.
-        gitdir = _read_gitdir_pointer(git_path)
-        if gitdir is None:
+        main_worktree = _main_worktree_from_git_path(git_path)
+        if main_worktree is None:
             return start
-        if not gitdir.is_absolute():
-            gitdir = (parent / gitdir).resolve()
-        # Worktree shape: <main_repo>/.git/worktrees/<name>
-        # Submodule shape: <parent_repo>/.git/modules/<name> — leave alone.
-        if gitdir.parent.name != "worktrees":
-            return start
-        main_git_dir = gitdir.parent.parent
-        if main_git_dir.name != ".git" or not main_git_dir.is_dir():
-            return start
-        return main_git_dir.parent
+        return main_worktree
     return start
 
 
@@ -285,19 +285,34 @@ def _read_gitdir_pointer(git_path: Path) -> Path | None:
     return Path(gitdir_raw)
 
 
+def _main_worktree_from_git_path(git_path: Path) -> Path | None:
+    """Return the main checkout root when ``git_path`` is a linked-worktree pointer."""
+    if not git_path.is_file():
+        return None
+    gitdir = _read_gitdir_pointer(git_path)
+    if gitdir is None:
+        return None
+    if not gitdir.is_absolute():
+        gitdir = (git_path.parent / gitdir).resolve()
+    # Worktree shape: <main_repo>/.git/worktrees/<name>
+    # Submodule shape: <parent_repo>/.git/modules/<name> — leave alone.
+    if gitdir.parent.name != "worktrees":
+        return None
+    main_git_dir = gitdir.parent.parent
+    if main_git_dir.name != ".git" or not main_git_dir.is_dir():
+        return None
+    return main_git_dir.parent
+
+
 def _classify_git_entry(git_path: Path) -> str:
     """Classify a ``.git`` filesystem entry for discovery diagnostics."""
     if git_path.is_dir():
         return "directory"
     if not git_path.exists() or not git_path.is_file():
         return "malformed_file"
-    gitdir = _read_gitdir_pointer(git_path)
-    if gitdir is None:
+    if _read_gitdir_pointer(git_path) is None:
         return "malformed_file"
-    if not gitdir.is_absolute():
-        gitdir = (git_path.parent / gitdir).resolve()
-    main_git_dir = gitdir.parent.parent
-    if gitdir.parent.name == "worktrees" and main_git_dir.name == ".git" and main_git_dir.is_dir():
+    if _main_worktree_from_git_path(git_path) is not None:
         return "worktree_pointer"
     return "gitdir_file"
 
