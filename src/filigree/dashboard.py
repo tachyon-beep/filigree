@@ -56,7 +56,6 @@ from filigree.core import (
 # Re-export so test imports continue to work.
 from filigree.dashboard_routes.common import _safe_bounded_int as _safe_bounded_int
 from filigree.install_support.version_marker import format_schema_mismatch_guidance
-from filigree.registry import LocalRegistry
 from filigree.types.api import SchemaVersionMismatchError
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -781,12 +780,7 @@ def main(
             _config.update(config)
             db = _open_db_for_filigree_dir(filigree_dir, check_same_thread=False)
             if allow_local_fallback and db.registry_backend == "clarion":
-                logger.warning(
-                    "Clarion registry backend unavailable; using local file registry fallback",
-                    extra={"tool": "dashboard", "registry_backend": db.registry_backend},
-                )
-                db.allow_local_fallback = True
-                db.registry = LocalRegistry(lambda: db._generate_unique_id("file_records", "f"))
+                db.enable_local_registry_fallback()
             _db = db
         except SchemaVersionMismatchError as exc:
             # Forward schema mismatch — exit cleanly (code 3, matching

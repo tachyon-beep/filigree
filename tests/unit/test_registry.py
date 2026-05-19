@@ -305,33 +305,104 @@ def test_filigree_db_composes_clarion_registry_when_configured(tmp_path: Path) -
         thread.join(timeout=1)
 
 
+def test_filigree_db_allow_local_fallback_tries_clarion_first(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    resolutions: list[str] = []
+
+    class FakeClarionRegistry:
+        def __init__(self, base_url: str, *, timeout_seconds: float = 5) -> None:
+            self.base_url = base_url
+            self.timeout_seconds = timeout_seconds
+
+        def resolve_file(self, path: str, *, language: str = "", actor: str = "") -> ResolvedFile:
+            resolutions.append(path)
+            return {
+                "file_id": "core:file:clarion-first@src/fallback.py",
+                "content_hash": "sha256:clarion-first",
+                "canonical_path": path,
+                "language": language,
+                "registry_backend": "clarion",
+            }
+
+        def is_displaced(self) -> bool:
+            return True
+
+    monkeypatch.setattr("filigree.core.ClarionRegistry", FakeClarionRegistry)
+    db = FiligreeDB(
+        tmp_path / "filigree.db",
+        prefix="test",
+        registry_backend="clarion",
+        clarion_config={
+            "base_url": "http://clarion.test",
+            "timeout_seconds": 1,
+            "allow_local_fallback": True,
+        },
+    )
+    try:
+        db.initialize()
+
+        file_record = db.register_file("src/fallback.py", language="python")
+
+        assert resolutions == ["src/fallback.py"]
+        assert file_record.id == "core:file:clarion-first@src/fallback.py"
+        assert file_record.content_hash == "sha256:clarion-first"
+        assert file_record.registry_backend == "clarion"
+        assert db.registry.is_displaced() is True
+    finally:
+        db.close()
+
+
 def test_filigree_db_requires_explicit_clarion_base_url(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match=r"clarion\.base_url"):
         FiligreeDB(tmp_path / "filigree.db", prefix="test", registry_backend="clarion")
 
 
-def test_filigree_db_allow_local_fallback_uses_local_registry(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
-    with caplog.at_level(logging.WARNING, logger="filigree.core"):
-        db = FiligreeDB(
-            tmp_path / "filigree.db",
-            prefix="test",
-            registry_backend="clarion",
-            clarion_config={
-                "base_url": "http://127.0.0.1:9",
-                "timeout_seconds": 0.1,
-                "allow_local_fallback": True,
-            },
-        )
+def test_filigree_db_allow_local_fallback_uses_local_registry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    resolution_attempts: list[str] = []
+
+    class FailingClarionRegistry:
+        def __init__(self, base_url: str, *, timeout_seconds: float = 5) -> None:
+            self.base_url = base_url
+            self.timeout_seconds = timeout_seconds
+
+        def resolve_file(self, path: str, *, language: str = "", actor: str = "") -> ResolvedFile:
+            resolution_attempts.append(path)
+            raise RegistryUnavailableError(
+                "Clarion unavailable for test",
+                url=f"{self.base_url}/api/v1/files",
+                path=path,
+                cause_kind="network",
+            )
+
+        def is_displaced(self) -> bool:
+            return True
+
+    monkeypatch.setattr("filigree.core.ClarionRegistry", FailingClarionRegistry)
+    db = FiligreeDB(
+        tmp_path / "filigree.db",
+        prefix="test",
+        registry_backend="clarion",
+        clarion_config={
+            "base_url": "http://clarion.test",
+            "timeout_seconds": 0.1,
+            "allow_local_fallback": True,
+        },
+    )
     try:
         db.initialize()
 
-        result = db.process_scan_results(
-            scan_source="ruff",
-            findings=[{"path": "src/fallback.py", "rule_id": "E501", "severity": "low", "message": "msg"}],
-        )
+        with caplog.at_level(logging.WARNING, logger="filigree.core"):
+            result = db.process_scan_results(
+                scan_source="ruff",
+                findings=[{"path": "src/fallback.py", "rule_id": "E501", "severity": "low", "message": "msg"}],
+            )
 
+        assert resolution_attempts == ["src/fallback.py"]
         assert db.allow_local_fallback is True
-        assert db.registry.is_displaced() is False
+        assert db.registry.is_displaced() is True
         file_record = db.get_file_by_path("src/fallback.py")
         assert file_record is not None
         assert file_record.id.startswith("test-f-")

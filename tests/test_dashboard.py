@@ -372,7 +372,7 @@ class TestMainGlobalReset:
         assert "Run `filigree doctor`" in stderr
         assert "Traceback" not in stderr
 
-    def test_ethereal_main_logs_local_registry_fallback(
+    def test_ethereal_main_enables_local_registry_fallback_without_startup_downgrade(
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
@@ -410,14 +410,16 @@ class TestMainGlobalReset:
             captured["config"] = dict(dash_module._config)
             captured["clarion_config"] = dict(dash_module._db.clarion_config) if dash_module._db is not None else {}
             captured["allow_local_fallback"] = dash_module._db.allow_local_fallback if dash_module._db is not None else False
+            captured["registry_displaced"] = dash_module._db.registry.is_displaced() if dash_module._db is not None else False
 
         monkeypatch.setattr("uvicorn.run", fake_run)
 
         with caplog.at_level(logging.WARNING, logger="filigree.dashboard"):
             dash_module.main(port=9999, no_browser=True, server_mode=False, allow_local_fallback=True)
 
-        assert "Clarion registry backend unavailable; using local file registry fallback" in caplog.text
+        assert "Clarion registry backend unavailable; using local file registry fallback" not in caplog.text
         assert captured["allow_local_fallback"] is True
+        assert captured["registry_displaced"] is True
         assert captured["config"]["clarion"] == {"base_url": "http://clarion.test"}
         assert captured["clarion_config"] == {"base_url": "http://clarion.test"}
 

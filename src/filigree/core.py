@@ -45,7 +45,14 @@ from filigree.db_scans import ScansMixin
 from filigree.db_schema import CURRENT_SCHEMA_VERSION, SCHEMA_SQL
 from filigree.db_workflow import WorkflowMixin
 from filigree.models import _EMPTY_TS, FileRecord, Issue, ScanFinding
-from filigree.registry import ClarionRegistry, LocalRegistry, RegistryProtocol, normalize_clarion_base_url
+from filigree.registry import (
+    ClarionRegistry,
+    LocalRegistry,
+    RegistryProtocol,
+    RegistryUnavailableError,
+    ResolvedFile,
+    normalize_clarion_base_url,
+)
 from filigree.types.core import (
     AssocType,
     ClarionConfig,
@@ -543,6 +550,40 @@ VALID_MODES: frozenset[str] = frozenset({"ethereal", "server"})
 VALID_REGISTRY_BACKENDS: frozenset[RegistryBackend] = frozenset(cast("tuple[RegistryBackend, ...]", get_args(RegistryBackend)))
 
 
+class _ClarionLocalFallbackRegistry:
+    """Try Clarion first, then fall back to local IDs for availability failures."""
+
+    def __init__(self, primary: RegistryProtocol, fallback: LocalRegistry, *, base_url: str) -> None:
+        self._primary = primary
+        self._fallback = fallback
+        self._base_url = base_url
+
+    def resolve_file(
+        self,
+        path: str,
+        *,
+        language: str = "",
+        actor: str = "",
+    ) -> ResolvedFile:
+        try:
+            return self._primary.resolve_file(path, language=language, actor=actor)
+        except RegistryUnavailableError as exc:
+            logger.warning(
+                "Clarion registry backend unavailable; using local file registry fallback",
+                extra={
+                    "registry_backend": "clarion",
+                    "clarion_base_url": self._base_url,
+                    "path": path,
+                    "url": exc.url,
+                    "cause_kind": exc.cause_kind,
+                },
+            )
+            return self._fallback.resolve_file(path, language=language, actor=actor)
+
+    def is_displaced(self) -> bool:
+        return self._primary.is_displaced()
+
+
 def _validate_registry_settings(raw: dict[str, Any], *, source: Path) -> None:
     """Validate ADR-014 registry backend settings in project config."""
     if "registry_backend" in raw:
@@ -750,6 +791,8 @@ class FiligreeDB(
                 )
                 raise ValueError(msg)
             self.registry = registry
+            if self.allow_local_fallback and registry_backend == "clarion":
+                self.enable_local_registry_fallback()
         elif registry_backend == "clarion":
             base_url_value = self.clarion_config.get("base_url")
             if not isinstance(base_url_value, str) or not base_url_value:
@@ -757,17 +800,31 @@ class FiligreeDB(
                 raise ValueError(msg)
             base_url = normalize_clarion_base_url(base_url_value)
             self.clarion_config["base_url"] = base_url
+            timeout_seconds = float(self.clarion_config.get("timeout_seconds", 5))
+            self.registry = ClarionRegistry(base_url, timeout_seconds=timeout_seconds)
             if self.allow_local_fallback:
-                logger.warning(
-                    "Clarion registry backend unavailable; using local file registry fallback",
-                    extra={"registry_backend": registry_backend, "clarion_base_url": base_url},
-                )
-                self.registry = LocalRegistry(lambda: self._generate_unique_id("file_records", "f"))
-            else:
-                timeout_seconds = float(self.clarion_config.get("timeout_seconds", 5))
-                self.registry = ClarionRegistry(base_url, timeout_seconds=timeout_seconds)
+                self.enable_local_registry_fallback()
         else:
-            self.registry = LocalRegistry(lambda: self._generate_unique_id("file_records", "f"))
+            self.registry = self._make_local_registry()
+
+    def _make_local_registry(self) -> LocalRegistry:
+        return LocalRegistry(lambda: self._generate_unique_id("file_records", "f"))
+
+    def enable_local_registry_fallback(self) -> None:
+        """Allow Clarion projects to use local IDs only after Clarion is unavailable."""
+        if self.registry_backend != "clarion":
+            return
+        self.allow_local_fallback = True
+        if isinstance(self.registry, _ClarionLocalFallbackRegistry):
+            return
+        if not self.registry.is_displaced():
+            msg = "Cannot enable local fallback for a non-displaced registry"
+            raise ValueError(msg)
+        self.registry = _ClarionLocalFallbackRegistry(
+            self.registry,
+            self._make_local_registry(),
+            base_url=str(self.clarion_config.get("base_url", "")),
+        )
 
     @classmethod
     def from_filigree_dir(cls, filigree_dir: Path, *, check_same_thread: bool = True) -> FiligreeDB:
