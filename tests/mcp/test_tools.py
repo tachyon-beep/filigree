@@ -2594,19 +2594,8 @@ class TestFileTools:
         assert detail["file"]["path"] == "src/example.py"
 
     async def test_register_file_displaced_under_clarion_mode(
-        self, mcp_db: FiligreeDB, caplog: pytest.LogCaptureFixture
+        self, clarion_mcp_db: FiligreeDB, caplog: pytest.LogCaptureFixture
     ) -> None:
-        class DisplacedRegistry:
-            def resolve_file(self, path: str, *, language: str = "", actor: str = "") -> dict[str, str]:
-                raise AssertionError("explicit register_file should be rejected before resolution")
-
-            def is_displaced(self) -> bool:
-                return True
-
-        mcp_db.registry_backend = "clarion"
-        mcp_db.clarion_config = {"base_url": "http://localhost:9111"}
-        mcp_db.registry = DisplacedRegistry()
-
         with caplog.at_level(logging.WARNING, logger="filigree.mcp_tools.files"):
             data = _parse(await call_tool("register_file", {"path": "src/example.py", "language": "python"}))
 
@@ -2617,8 +2606,12 @@ class TestFileTools:
         assert records
         assert records[0].tool == "mcp"
         assert records[0].file_path == "src/example.py"
+        assert clarion_mcp_db.registry.is_displaced() is True
 
     async def test_register_file_displacement_uses_registry_protocol(self, mcp_db: FiligreeDB) -> None:
+        # This deliberately constructs an invalid hybrid state that FiligreeDB.__init__
+        # rejects. The point is to pin the handler to registry.is_displaced(), not the
+        # cached backend label, if future tests monkeypatch the registry protocol.
         mcp_db.registry_backend = "clarion"
         mcp_db.clarion_config = {"base_url": "http://localhost:9111"}
 
